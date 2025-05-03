@@ -1,16 +1,33 @@
 [package]
-name = "debugchrome"
+description = "A protocol‐handler for launching & controlling Chrome via CDP"
+license = "MIT"
+repository = "https://github.com/davehorner/debugchrome-cdp-rs"
+homepage = "https://github.com/davehorner/debugchrome-cdp-rs"
+keywords = ["chrome", "cdp", "protocol-handler"]
+categories = [
+    "command-line-utilities",
+    "os::windows-apis",
+    "web-programming::websocket",
+    "development-tools::debugging"
+]
+readme = "README.md"
+name = "debugchrome-cdp-rs"
 version = "0.1.0"
 edition = "2024"
+[[bin]]
+name = "debugchrome"
+path = "src/main.rs"
 
 [dependencies]
 base64 = "0.22.1"
-cdp-rs = "0.3.3"
+chrono = "0.4.41"
 dirs = "6.0.0"
 futures-util = "0.3.31"
+log = "0.4.27"
 rayon = "1.10.0"
 reqwest = { version = "0.12.15", features = ["blocking", "json"] }
 serde_json = "1.0.140"
+simplelog = "0.12.2"
 tokio = { version = "1.44.2", features = ["macros", "rt-multi-thread"] }
 tokio-tungstenite = "0.26.2"
 tungstenite = "0.26.2"

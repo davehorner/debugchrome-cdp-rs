@@ -2,11 +2,11 @@
 
 # debugchrome-cdp-rs
 
-`debugchrome-cdp-rs` introduces a command `debugchrome` and a custom windows protocol, `debugchrome:`.
+`debugchrome-cdp-rs` introduces a command `debugchrome` and a custom windows protocol, `debugchrome:` and `debugchrome://`.  It is currently windows only.
 
 When using default protocol handlers, the url opens in the default browser.  There is no cross platform way to interact with the programs that launch or the documents themselves after launch.  Url invocation gives you no way to interrogate the system to determine what exact tab and program the user is interacting with.
 
-Using something like open, cmd /c start, [open::that](https://github.com/Byron/open-rs) the default application runs but there are no great way to query/interact with that unknown servicing application and document.
+Using something like open, cmd /c start, [open::that](https://github.com/Byron/open-rs) the default application runs but there are no great ways to query/interact with that unknown servicing application and document.
 
 Sometimes defaults aren't set, other times the api may return incorrect results, or the browser just doesn't open as it should. [#73](https://github.com/Byron/open-rs/issues/73)  It's unreliable like udp.
 
@@ -23,17 +23,23 @@ The protocol works if you specify `debugchrome:` or `debugchrome://`.
    - Example: `debugchrome:https://www.rust-lang.org?!x=0&!y=0&!w=800&!h=600`
    - Window bounds can be expressed as a percentage and relative to a monitor
    - Percentage and monitor: `debugchrome:https://www.rustlang.org?!x=12.5%&!y=12.5%&!w=75%&!h=75%&!monitor=2`
-2. **Set `bangId`**:
-   - Sets a custom `bangId` in the tab's JavaScript context using the `!id` parameter in the URL.
+2. **Set `Id`**:
+   - Sets a custom `Id` in the tab's JavaScript context(session storage so it persists refresh) using the `!id` parameter in the URL.
    - Example: `debugchrome:https://www.rust-lang.org?x=0&y=0&w=800&h=600&!id=123`
    - This Id is used to annotate the url with an ID that can be used to find and interact with the tab.
-3. **Take a Screenshot**:
+3. **Timeout**:
+   - Open the url, associate an id, specify a timeout.  `debugchrome` will wait for the specified number of seconds and then search and close the page automatically.
+   - Example: `debugchrome://https://crates.io/crates/debugchrome-cdp-rs?!id=home&!timeout=5`
+5. **Keep Focus**
+   - Add a !keep_focus parameter in the url and the window that is currently active will be re-focused after the page is loaded.
+   - Example: [`debugchrome://https://crates.io/crates/debugchrome-cdp-rs?!id=21jump&!keep_focus`](`debugchrome://https://crates.io/crates/debugchrome-cdp-rs?!id=21jump&!keep_focus`)
+6. **Take a Screenshot**:
    - Captures a screenshot of the opened tab and saves it as `screenshot.png`.
 
-4. **Search for Tabs by `bangId`**:
+7. **Search for Tabs by `bangId`**:
    - Searches all open tabs for a specific `bangId` and prints the matching tab's URL.
 
-5. **Register Custom Protocol**:
+8. **Register Custom Protocol**:
    - Registers the `debugchrome:` protocol in the Windows registry for easier usage.
 
 ---

@@ -120,7 +120,7 @@ async fn main() -> std::io::Result<()> {
     let log_file = File::create(log_file_path)?;
     WriteLogger::init(LevelFilter::Debug, Config::default(), log_file).unwrap();
 
-    if args.len() > 0 {
+    if args.len() > 1 {
         let raw_url = &args[1];
         log::debug!("Received URL: {}", raw_url);
         println!("Received URL: {}", raw_url);
@@ -349,7 +349,7 @@ async fn main() -> std::io::Result<()> {
                 return Ok(());
             }
         }
-        log::debug!("Tab with bangId {} not found, opening new tab.", translated);
+        log::debug!("{} not found, opening.", clean_url);
         let result = if open_window {
             open_window_via_devtools(&clean_url, &bangs).await
         } else {
@@ -383,8 +383,10 @@ async fn main() -> std::io::Result<()> {
             }
 
             // Call set_bang_id to set the bangId in the tab
-            log::debug!("Setting bangId in the tab...{}", &translated);
-            if let Err(e) = set_bang_id_session(&target_id, &translated) {
+            log::debug!("Setting bangId in the tab...{}", &clean_url);
+            if let Err(e) =
+                set_bang_id_session(&target_id, &bangs.get("id").cloned().unwrap_or_default())
+            {
                 log::debug!("Failed to set bangId: {}", e);
             }
             if let Some(timeout_seconds) = timeout_seconds {
@@ -1120,69 +1122,61 @@ async fn close_tab_by_target_id(target_id: &str) -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
-fn set_bang_id_session(target_id: &str, url: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let parsed = url::Url::parse(url)?;
-    if let Some(bang_id) = parsed
-        .query_pairs()
-        .find(|(k, _)| k == "!id")
-        .map(|(_, v)| v.to_string())
-    {
-        let socket_url = format!("ws://localhost:9222/devtools/page/{}", target_id);
-        let (mut socket, _) = tungstenite::connect(&socket_url)?;
+fn set_bang_id_session(target_id: &str, bang_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let socket_url = format!("ws://localhost:9222/devtools/page/{}", target_id);
+    let (mut socket, _) = tungstenite::connect(&socket_url)?;
 
-        // Set the bangId in sessionStorage
-        let set_bang_id = serde_json::json!({
-            "id": 3,
-            "method": "Runtime.evaluate",
-            "params": {
-                "expression": format!("sessionStorage.setItem('bangId', '{}');", bang_id),
-            }
-        });
-        socket.send(Message::Text(set_bang_id.to_string().into()))?;
-        log::debug!("Set sessionStorage.bangId to {}", bang_id);
+    // Set the bangId in sessionStorage
+    let set_bang_id = serde_json::json!({
+        "id": 3,
+        "method": "Runtime.evaluate",
+        "params": {
+            "expression": format!("sessionStorage.setItem('bangId', '{}');", bang_id),
+        }
+    });
+    socket.send(Message::Text(set_bang_id.to_string().into()))?;
+    log::debug!("Set sessionStorage.bangId to {}", bang_id);
 
-        // Verify that the bangId was set
-        let verify_bang_id = serde_json::json!({
-            "id": 4,
-            "method": "Runtime.evaluate",
-            "params": {
-                "expression": "sessionStorage.getItem('bangId')",
-            }
-        });
-        socket.send(Message::Text(verify_bang_id.to_string().into()))?;
-        log::debug!("Sent command to verify bangId");
+    // Verify that the bangId was set
+    let verify_bang_id = serde_json::json!({
+        "id": 4,
+        "method": "Runtime.evaluate",
+        "params": {
+            "expression": "sessionStorage.getItem('bangId')",
+        }
+    });
+    socket.send(Message::Text(verify_bang_id.to_string().into()))?;
+    log::debug!("Sent command to verify bangId");
 
-        // Wait for the response
-        let start_time = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(5);
-        while start_time.elapsed() < timeout {
-            if let Ok(msg) = socket.read() {
-                if let Message::Text(txt) = msg {
-                    log::debug!("Received message: {}", txt);
-                    let json: serde_json::Value = serde_json::from_str(&txt)?;
-                    if json["id"] == 4 {
-                        if let Some(verified_bang_id) = json["result"]["result"]["value"].as_str() {
-                            if verified_bang_id == bang_id {
-                                log::debug!("Successfully verified bangId: {}", verified_bang_id);
-                                return Ok(());
-                            } else {
-                                log::debug!(
-                                    "Mismatch: Expected {}, but got {}",
-                                    bang_id,
-                                    verified_bang_id
-                                );
-                                return Err("Failed to verify bangId".into());
-                            }
+    // Wait for the response
+    let start_time = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(5);
+    while start_time.elapsed() < timeout {
+        if let Ok(msg) = socket.read() {
+            if let Message::Text(txt) = msg {
+                log::debug!("Received message: {}", txt);
+                let json: serde_json::Value = serde_json::from_str(&txt)?;
+                if json["id"] == 4 {
+                    if let Some(verified_bang_id) = json["result"]["result"]["value"].as_str() {
+                        if verified_bang_id == bang_id {
+                            log::debug!("Successfully verified bangId: {}", verified_bang_id);
+                            return Ok(());
+                        } else {
+                            log::debug!(
+                                "Mismatch: Expected {}, but got {}",
+                                bang_id,
+                                verified_bang_id
+                            );
+                            return Err("Failed to verify bangId".into());
                         }
                     }
                 }
             }
         }
-
-        log::debug!("Timeout while verifying bangId");
-        return Err("Timeout while verifying bangId".into());
     }
-    Ok(())
+
+    log::debug!("Timeout while verifying bangId");
+    return Err("Timeout while verifying bangId".into());
 }
 
 fn spawn_timeout_closer(

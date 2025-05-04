@@ -108,6 +108,8 @@ debugchrome.exe --search 123 --close
 - Searches for the tab with the specified `bangId` and closes it.
 - Example: `debugchrome.exe --search 123 --close` will close the tab where `window.bangId` is `123`.
 - **Note**: The `!id` parameter must be specified when opening the tab to use this feature.
+- **Note**: Specifying `!close` without an `!id` will not close, if you specify close and the page isn't found, the page will be opened.  The same url with the `!close` specified, will then close the page when opened again.
+- Example: `debugchrome.exe "debugchrome:https://www.rust-lang.org!id=1&!close&!openwindow&!keep_focus"` will open and close a window without taking focus.
 
 ### 8. **Refresh a Tab**
 ```bash
@@ -132,6 +134,15 @@ debugchrome.exe "debugchrome:https://www.rust-lang.org?!monitor=2"
 - Opens the tab on a specific monitor.
 - Example: `debugchrome.exe "debugchrome:https://www.rust-lang.org?!monitor=2"` will open the tab on monitor 2.
 - Monitor indices start from 0.
+
+
+### 11. **Open Window**
+```bash
+debugchrome.exe "debugchrome:https://www.rust-lang.org?!openwindow"
+```
+- Opens the url as a new window instead of as a tab.
+- Example: `debugchrome.exe "debugchrome:https://www.rust-lang.org?!openwindow"` will open the url in a new window.
+
 
 ## Sample CLI
 1. **Open a url using cli**:

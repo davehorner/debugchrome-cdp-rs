@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1](https://github.com/davehorner/debugchrome-cdp-rs/compare/v0.1.0...v0.1.1) - 2025-05-04
+
+### Fixed
+
+- update README.md with new debugchrome URL format and correct pluralization, change temporary directory name in main.rs to debugchrome
+
 ## [0.1.0](https://github.com/davehorner/debugchrome-cdp-rs/releases/tag/v0.1.0) - 2025-05-03
 
 ### Added

@@ -222,7 +222,7 @@ async fn main() -> std::io::Result<()> {
         let translated = raw_url.replacen("debugchrome://", "", 1);
         let translated = translated.replacen("debugchrome:", "", 1);
         let (clean_url, bangs) = split_and_process_url(&translated);
-        let user_data_dir = std::env::temp_dir().join("chromedev");
+        let user_data_dir = std::env::temp_dir().join("debugchrome");
         // Check if the !keep_focus parameter is present
         keep_focus = bangs.get("keep_focus").is_some();
         log::debug!("keep_focus: {}", keep_focus);
@@ -1047,11 +1047,11 @@ fn prepare_chrome_profile(new_environment: bool) -> io::Result<std::path::PathBu
 
     let temp_root = if new_environment {
         let timestamp = chrono::Local::now()
-            .format("chromedev-%y%m%d%H%M%S")
+            .format("debugchrome-%y%m%d%H%M%S")
             .to_string();
         env::temp_dir().join(timestamp)
     } else {
-        env::temp_dir().join("chromedev")
+        env::temp_dir().join("debugchrome")
     };
 
     let temp_default = temp_root.join("Default");

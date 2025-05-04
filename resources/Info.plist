@@ -1,0 +1,11 @@
+<key>CFBundleURLTypes</key>
+<array>
+    <dict>
+        <key>CFBundleURLName</key>
+        <string>com.debugchrome</string>
+        <key>CFBundleURLSchemes</key>
+        <array>
+            <string>debugchrome</string>
+        </array>
+    </dict>
+</array>

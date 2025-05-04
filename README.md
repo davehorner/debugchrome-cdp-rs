@@ -29,13 +29,13 @@ The protocol works if you specify `debugchrome:` or `debugchrome://` before your
    - This Id is used to annotate the url with an ID that can be used to find and interact with the tab.
 3. **Timeout**:
    - `debugchrome` will wait for the specified number of seconds and then search and close the page automatically.
-   - Example: `debugchrome://https://crates.io/crates/debugchrome-cdp-rs?!id=123&!timeout=5`
+   - Example: `debugchrome://https://crates.io/crates/debugchrome-cdp-rs?!timeout=5`
 4. **Keep Focus**
    - Add a !keep_focus parameter in the url and the window that is currently active will be re-focused after the page is loaded.
-   - Example: [`debugchrome://https://crates.io/crates/debugchrome-cdp-rs?!id=21jump&!keep_focus`](`debugchrome://https://crates.io/crates/debugchrome-cdp-rs?!id=21jump&!keep_focus`)
+   - Example: [`debugchrome://https://crates.io/crates/debugchrome-cdp-rs?!id=21jump&!keep_focus`](debugchrome://https://crates.io/crates/debugchrome-cdp-rs?!id=21jump&!keep_focus)
    This allows you to launch a url from cmd or powershell and not have the webpage take focus away from the terminal.
 5. **Take a Screenshot**:
-   - Captures a screenshot of the page and saves it as `screenshot.png`.
+   - Captures a screenshot of the page and opens the default viewer for `.png`.
    - Example: `debugchrome:https://www.rust-lang.org?x=0&y=0&w=800&h=600&!id=123&!screenshot`
 
 6. **Search for Tabs by `bangId`**:
@@ -91,9 +91,9 @@ debugchrome.exe --search 123
 
 ### 5. **Take a Screenshot**
 ```bash
-debugchrome.exe "debugchrome:https://www.rust-lang.org"
+debugchrome.exe "debugchrome:https://www.rust-lang.org!screenshot"
 ```
-- Captures a screenshot of the opened tab and saves it as `screenshot.png`.
+- Captures a screenshot of the tab and opens the default viewer for the screenshot.
 
 ### 6. **Keep Focus**
 ```bash
@@ -111,28 +111,27 @@ debugchrome.exe --search 123 --close
 
 ### 8. **Refresh a Tab**
 ```bash
-debugchrome.exe --search 123 --refresh (not implemented)
+debugchrome.exe --search 123 [--close]
 ```
-- Searches for the tab with the specified `bangId` and refreshes it.
-- Example: `debugchrome.exe --search 123 --refresh` will refresh the tab where `window.bangId` is `123`.
+- Searches for the tab with the specified `id` and activates it.  If !refresh is specified on the url, the page will be refreshed after being activated.
+- Example: `debugchrome.exe --search 123 --close` will close the page where `window.bangId` is `123`.
+- Example: `debugchrome.exe "debugchrome:https://www.rust-lang.org?!refresh"` will close the page after 10 seconds.
 - **Note**: The `!id` parameter must be specified when opening the tab to use this feature.
 
 ### 9. **Set Timeout**
 ```bash
-debugchrome.exe "debugchrome:https://www.rust-lang.org?!timeout=10&!id=123"
+debugchrome.exe "debugchrome:https://www.rust-lang.org?!timeout=10"
 ```
 - Sets a timeout (in seconds) for the tab to remain open.
-- Example: `debugchrome.exe "debugchrome:https://www.rust-lang.org?!timeout=10&!id=123"` will close the tab after 10 seconds.
-- **Note**: The `!id` parameter must be specified when opening the tab to use this feature.
+- Example: `debugchrome.exe "debugchrome:https://www.rust-lang.org?!timeout=10"` will close the page after 10 seconds.
 
 ### 10. **Specify Monitor**
 ```bash
-debugchrome.exe "debugchrome:https://www.rust-lang.org?!monitor=2&!id=123"
+debugchrome.exe "debugchrome:https://www.rust-lang.org?!monitor=2"
 ```
 - Opens the tab on a specific monitor.
-- Example: `debugchrome.exe "debugchrome:https://www.rust-lang.org?!monitor=2&!id=123"` will open the tab on monitor 2.
-- Monitor indices start from 1.
-- **Note**: The `!id` parameter must be specified when opening the tab to use this feature.
+- Example: `debugchrome.exe "debugchrome:https://www.rust-lang.org?!monitor=2"` will open the tab on monitor 2.
+- Monitor indices start from 0.
 
 ## Sample CLI
 1. **Open a url using cli**:
@@ -179,27 +178,19 @@ You can run a debug browser and open things in there to get programatic access t
 
 ## Example Output
 
-Output is minimal to stdout; detailed output can be found in `%USERPROFILE%\.cargo\bin\debugchrome.log` or next to wherever `debugchrome` lives.  The same is true for the screenshots; at this time it saves a single `%USERPROFILE%\.cargo\bin\screenshot.png` or `& "$env:USERPROFILE\.cargo\bin\screenshot.png"` or next to the executable.  Sorry for the loose files in bin; this may change in the future.
-
-```
+Output is minimal to stdout; detailed output can be found in `%USERPROFILE%\.cargo\bin\debugchrome.log` or next to wherever `debugchrome` lives.  The same is true for the screenshots; it saves a single `%USERPROFILE%\.cargo\bin\debugchome.png` / `& "$env:USERPROFILE\.cargo\bin\debugchrome.png"` or next to the executable.  Sorry for the loose files in bin, at least they all start with debugchrome; this may change in the future.  Chrome profile folders are kept in %TEMP%\ starting with debugchrome.
 
 ---
 
 ## Notes
 
 1. **Dependencies**:
-   - Ensure that Chrome is running with the `--remote-debugging-port=9222` flag.
+   - Ensure that Chrome is running with the `--remote-debugging-port=9222` flag.  If it's not running, it will attempt to start it for you.
 
-2. **Error Handling**:
-   - If the `!id` parameter is missing, an error is logged, and the program continues execution.
-
-3. **Skipped Tabs**:
+2. **Skipped Tabs**:
    - Tabs with URLs starting with `ws://`, `chrome-extension://`, `chrome://`, , `about:`, `data:`, `view-source:`, `devtools://`, or `chrome-devtools://` are skipped during the search.
 
-4. **Timeouts**:
-   - A 5-second timeout is enforced for WebSocket operations to prevent hanging.
-
-5. **It's not fast**:
+3. **It's not fast**:
    - If you need to scan 400 tabs; it is going to take some time.
 
 ---

@@ -108,6 +108,7 @@ fn split_and_process_url(raw_url: &str) -> (String, std::collections::HashMap<St
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
+    let args: Vec<String> = env::args().collect();
     // Set the current working directory to the directory of the executing binary
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
@@ -119,11 +120,14 @@ async fn main() -> std::io::Result<()> {
     let log_file = File::create(log_file_path)?;
     WriteLogger::init(LevelFilter::Debug, Config::default(), log_file).unwrap();
 
-    log::debug!("Starting Debug Chrome...");
+    if args.len() > 0 {
+        let raw_url = &args[1];
+        log::debug!("Received URL: {}", raw_url);
+        println!("Received URL: {}", raw_url);
+    }
     let log_file_path = std::fs::canonicalize(log_file_path)?.display().to_string();
     println!("Log file: {}", log_file_path);
 
-    let args: Vec<String> = env::args().collect();
     if args.len() > 2 && args[1] == "--close-target" {
         let target_id = &args[2];
         let timeout_seconds: u64 = if let Some(arg) = args.get(4) {
@@ -175,10 +179,26 @@ async fn main() -> std::io::Result<()> {
             .and_then(|mut child| child.wait())
         {
             println!("Failed to register debugchrome protocol: {}", e);
-            println!(
-                "Try running this program in an elevated command prompt (Run as Administrator)."
-            );
-            println!("or double click the reg file.");
+            println!("Press Enter to run an elevated powershell or Ctrl+C to exit.");
+            let mut input = String::new();
+            let _ = std::io::stdin().read_line(&mut input);
+            if let Err(e) = Command::new("powershell")
+                .args([
+                    "-Command",
+                    "Start-Process",
+                    "powershell",
+                    "-ArgumentList",
+                    &format!("'{}'", "regedit /s debugchrome.reg"),
+                    "-Verb",
+                    "runAs",
+                ])
+                .spawn()
+                .and_then(|mut child| child.wait())
+            {
+                println!("Failed to elevate and register debugchrome protocol: {}", e);
+            } else {
+                println!("Registered debugchrome protocol successfully with elevation.");
+            }
         } else {
             println!("Registered debugchrome protocol successfully.");
         }
@@ -655,8 +675,12 @@ fn take_screenshot(target_id: &str) -> Result<(), Box<dyn std::error::Error>> {
             let json: serde_json::Value = serde_json::from_str(&txt)?;
             if let Some(data) = json["result"]["data"].as_str() {
                 let bytes = base64::engine::general_purpose::STANDARD.decode(data)?;
-                std::fs::write("screenshot.png", bytes)?;
-                log::debug!("Screenshot saved to screenshot.png");
+                std::fs::write("debugchrome.png", bytes)?;
+                Command::new("powershell")
+                    .args(["-NoProfile", "-Command", "Start-Process debugchrome.png"])
+                    .status()
+                    .ok();
+                log::debug!("Screenshot saved to debugchrome.png");
                 break;
             }
         }

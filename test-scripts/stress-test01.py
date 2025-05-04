@@ -114,8 +114,8 @@ def divide_monitor_into_grid(monitor, rows, cols, working_area=None):
 def main():
     # Get all connected monitors
     monitors = get_monitors()
-    rows, cols = 3, 3  # Define the grid size (e.g., 4x4)
-    max_concurrent_processes = rows*cols # Control the number of subprocesses running at one time
+    rows, cols = 4, 6 # Define the grid size (e.g., 4x4)
+    max_concurrent_processes = rows*cols * len(monitors)# Control the number of subprocesses running at one time
     # Shuffle the grid cells across all monitors for random order
     all_grid_cells = []
     for monitor_index, monitor in enumerate(monitors):
@@ -123,7 +123,7 @@ def main():
         grid = divide_monitor_into_grid(monitor, rows, cols, working_area)
         for x, y, w, h in grid:
             all_grid_cells.append((monitor_index, x, y, w, h))
-    random.shuffle(all_grid_cells)
+    # random.shuffle(all_grid_cells)
     # Iterate over the shuffled grid cells and open Chrome windows
     try:
         with ThreadPoolExecutor(max_workers=max_concurrent_processes) as executor:

@@ -5,7 +5,6 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use std::{env, fs, io};
@@ -148,7 +147,10 @@ async fn main() -> std::io::Result<()> {
     };
 
     let log_file = if append_log {
-        fs::OpenOptions::new().append(true).create(true).open(log_file_path)?
+        fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(log_file_path)?
     } else {
         File::create(log_file_path)?
     };
@@ -361,7 +363,7 @@ async fn main() -> std::io::Result<()> {
                 // set_tab_title(&target_id, &title).ok();
                 if refresh {
                     log::debug!("Refreshing tab with bangId {}: {}", bang_id, target_id);
-                    refresh_tab(&target_id).ok();
+                    refresh_tab(&target_id).await.ok();
                 }
                 log::debug!(
                     "Tab with bangId {} is already open, activating it.",
@@ -410,7 +412,7 @@ async fn main() -> std::io::Result<()> {
             //     log::debug!("Failed to find Chrome window with title '{}'.",&target_id);
             // }
             if screenshot {
-                if let Err(e) = take_screenshot(&target_id) {
+                if let Err(e) = take_screenshot(&target_id).await {
                     log::debug!("Failed to take screenshot: {}", e);
                     // std::thread::sleep(std::time::Duration::from_secs(3)); // Ensure sleep even on error
                     #[cfg(target_os = "windows")]
@@ -425,7 +427,7 @@ async fn main() -> std::io::Result<()> {
             // Call set_bang_id to set the bangId in the tab
             log::debug!("Setting bangId in the tab...{}", &clean_url);
             if let Err(e) =
-                set_bang_id_session(&target_id, &bangs.get("id").cloned().unwrap_or_default())
+                set_bang_id_session(&target_id, &bangs.get("id").cloned().unwrap_or_default()).await
             {
                 log::debug!("Failed to set bangId: {}", e);
             }
@@ -450,8 +452,14 @@ async fn main() -> std::io::Result<()> {
                 None
             };
 
-            let mut args = String::from("/C start  chrome.exe --remote-debugging-port=9222 --enable-automation --no-first-run");
-            args.push_str(&format!(" --user-data-dir={} {}", user_data_dir.display(), clean_url));
+            let mut args = String::from(
+                "/C start  chrome.exe --remote-debugging-port=9222 --enable-automation --no-first-run",
+            );
+            args.push_str(&format!(
+                " --user-data-dir={} {}",
+                user_data_dir.display(),
+                clean_url
+            ));
 
             if let Some(position) = window_position {
                 args.push_str(&format!(" {}", position));
@@ -499,8 +507,9 @@ async fn open_window_via_devtools(
         ))
         .await?;
 
-    let browser_context_id = match socket.next().await {
-        Some(Ok(tungstenite::Message::Text(txt))) => {
+    let browser_context_id = match tokio::time::timeout(Duration::from_secs(5), socket.next()).await
+    {
+        Ok(Some(Ok(tungstenite::Message::Text(txt)))) => {
             let json: serde_json::Value = serde_json::from_str(&txt)?;
             json["result"]["browserContextId"]
                 .as_str()
@@ -510,49 +519,53 @@ async fn open_window_via_devtools(
     };
     let monitor_index = bangs.get("monitor").and_then(|v| v.parse::<usize>().ok());
     let dpi_scaling_enabled = bangs
-            .get("dpi")
-            .map(|v| v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-let (left, top, width, height, include_bounds) = if let Some(bounds) = get_screen_bounds(&bangs, monitor_index, dpi_scaling_enabled) {
-    (bounds.0, bounds.1, bounds.2, bounds.3, true)
-} else {
-    (0, 0, 0, 0, false) // Indicate that bounds should not be included
-};
+        .get("dpi")
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let (left, top, width, height, include_bounds) =
+        if let Some(bounds) = get_screen_bounds(&bangs, monitor_index, dpi_scaling_enabled) {
+            (bounds.0, bounds.1, bounds.2, bounds.3, true)
+        } else {
+            (0, 0, 0, 0, false) // Indicate that bounds should not be included
+        };
 
-println!("{:?} Bounds: left={}, top={}, width={}, height={}, include_bounds={}",monitor_index, left, top, width, height, include_bounds);
-let unique = get_unique_id();
+    println!(
+        "{:?} Bounds: left={}, top={}, width={}, height={}, include_bounds={}",
+        monitor_index, left, top, width, height, include_bounds
+    );
+    let unique = get_unique_id();
     if let Some(context_id) = browser_context_id {
-if include_bounds {
-    let create_target = serde_json::json!({
-        "id": unique,
-        "method": "Target.createTarget",
-        "params": {
-            "url": clean_url,
-            "browserContextId": context_id,
-            "left": left,
-            "top": top,
-            "width": width,
-            "height": height,
-            "newWindow": true
+        if include_bounds {
+            let create_target = serde_json::json!({
+                "id": unique,
+                "method": "Target.createTarget",
+                "params": {
+                    "url": clean_url,
+                    "browserContextId": context_id,
+                    "left": left,
+                    "top": top,
+                    "width": width,
+                    "height": height,
+                    "newWindow": true
+                }
+            });
+            socket
+                .send(tungstenite::Message::Text(create_target.to_string().into()))
+                .await?;
+        } else {
+            let create_target = serde_json::json!({
+                "id": unique,
+                "method": "Target.createTarget",
+                "params": {
+                    "url": clean_url,
+                    "browserContextId": context_id,
+                    "newWindow": true
+                }
+            });
+            socket
+                .send(tungstenite::Message::Text(create_target.to_string().into()))
+                .await?;
         }
-    });
-    socket
-        .send(tungstenite::Message::Text(create_target.to_string().into()))
-        .await?;
-} else {
-    let create_target = serde_json::json!({
-        "id": unique,
-        "method": "Target.createTarget",
-        "params": {
-            "url": clean_url,
-            "browserContextId": context_id,
-            "newWindow": true
-        }
-    });
-    socket
-        .send(tungstenite::Message::Text(create_target.to_string().into()))
-        .await?;
-}
         // // Step 2: Create a new target (window) in the new browser context
         // let create_target = serde_json::json!({
         //     "id": 2,
@@ -572,7 +585,10 @@ if include_bounds {
         //     .await?;
 
         // Step 3: Wait for the response to get the targetId
-        if let Some(Ok(tungstenite::Message::Text(txt))) = socket.next().await {
+        let timeout = std::time::Duration::from_secs(5); // Define a timeout duration
+        if let Ok(Some(Ok(tungstenite::Message::Text(txt)))) =
+            tokio::time::timeout(timeout, socket.next()).await
+        {
             let json: serde_json::Value = serde_json::from_str(&txt)?;
             if let Some(target_id) = json["result"]["targetId"].as_str() {
                 return Ok(target_id.to_owned());
@@ -621,11 +637,7 @@ fn get_screen_bounds(
             {
                 println!(
                     "Adjusted bounds to monitor {}: x={}, y={}, w={}, h={}",
-                    index,
-                    adjusted_x,
-                    adjusted_y,
-                    adjusted_w,
-                    adjusted_h
+                    index, adjusted_x, adjusted_y, adjusted_w, adjusted_h
                 );
                 return Some((adjusted_x, adjusted_y, adjusted_w, adjusted_h));
             }
@@ -700,7 +712,6 @@ async fn open_tab_via_devtools_and_return_id(
     Err("Failed to get targetId".into())
 }
 
-#[allow(dead_code)]
 async fn set_window_bounds(
     target_id: &str,
     x: i32,
@@ -708,121 +719,105 @@ async fn set_window_bounds(
     w: i32,
     h: i32,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // let window_id_resp: serde_json::Value = reqwest::get("http://localhost:9222/json").await?
-    //     .json().await?;
+    let socket_url = format!("ws://localhost:9222/devtools/page/{}", target_id);
+    let (mut socket, _) = tokio_tungstenite::connect_async(&socket_url).await?;
 
-    let version: serde_json::Value = reqwest::get("http://localhost:9222/json/version")
-        .await?
-        .json()
-        .await?;
-    let ws_url = version["webSocketDebuggerUrl"]
-        .as_str()
-        .ok_or("No WebSocket URL")?;
-    let (mut socket, _) = tungstenite::connect(ws_url)?;
-
-    let get_window = serde_json::json!({
-        "id": 3,
-        "method": "Browser.getWindowForTarget",
+    let bounds = serde_json::json!({
+        "id": 4,
+        "method": "Browser.setWindowBounds",
         "params": {
-            "targetId": target_id
+            "windowId": target_id,
+            "bounds": { "left": x, "top": y, "width": w, "height": h }
         }
     });
-    socket.send(tungstenite::Message::Text(get_window.to_string().into()))?;
-
-    let mut window_id: Option<i32> = None;
-    while let Ok(msg) = socket.read() {
-        if let tungstenite::Message::Text(txt) = msg {
-            let json: serde_json::Value = serde_json::from_str(&txt)?;
-            if let Some(id) = json["result"]["windowId"].as_i64() {
-                window_id = Some(id as i32);
-                break;
-            }
-        }
-    }
-
-    if let Some(id) = window_id {
-        let bounds = serde_json::json!({
-            "id": 4,
-            "method": "Browser.setWindowBounds",
-            "params": {
-                "windowId": id,
-                "bounds": { "left": x, "top": y, "width": w, "height": h }
-            }
-        });
-        socket.send(tungstenite::Message::Text(bounds.to_string().into()))?;
-    }
-
+    socket
+        .send(tungstenite::Message::Text(bounds.to_string().into()))
+        .await?;
     Ok(())
 }
 
-fn take_screenshot(target_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn take_screenshot(target_id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let socket_url = format!("ws://localhost:9222/devtools/page/{}", target_id);
-    let (mut socket, _) = tungstenite::connect(&socket_url)?;
-
+    let (mut socket, _) = tokio_tungstenite::connect_async(&socket_url).await?;
     let enable = serde_json::json!({
         "id": 1,
         "method": "Page.enable"
     });
-    socket.send(tungstenite::Message::Text(enable.to_string().into()))?;
+    socket
+        .send(tungstenite::Message::Text(enable.to_string().into()))
+        .await?;
 
     let capture = serde_json::json!({
         "id": 2,
         "method": "Page.captureScreenshot"
     });
     log::debug!("Sending captureScreenshot command: {}", capture);
-    socket.send(tungstenite::Message::Text(capture.to_string().into()))?;
+    socket
+        .send(tungstenite::Message::Text(capture.to_string().into()))
+        .await?;
 
     log::debug!("Current directory: {:?}", std::env::current_dir()?);
-    while let Ok(msg) = socket.read() {
-        if let tungstenite::Message::Text(txt) = msg {
-            let json: serde_json::Value = serde_json::from_str(&txt)?;
-            if let Some(data) = json["result"]["data"].as_str() {
-                let bytes = base64::engine::general_purpose::STANDARD.decode(data)?;
-                std::fs::write("debugchrome.png", bytes)?;
-                Command::new("powershell")
-                    .args(["-NoProfile", "-Command", "Start-Process debugchrome.png"])
-                    .status()
-                    .ok();
-                log::debug!("Screenshot saved to debugchrome.png");
-                break;
-            }
+    let timeout_duration = Duration::from_secs(5); // Set a timeout duration
+    let timeout_future = tokio::time::sleep(timeout_duration);
+    tokio::pin!(timeout_future);
+
+    'outer: while let Some(Ok(tungstenite::Message::Text(txt))) = tokio::select! {
+        _ = &mut timeout_future => {
+            log::debug!("Timeout while waiting for screenshot response.");
+            break 'outer;
+        }
+        msg = socket.next() => msg
+    } {
+        let json: serde_json::Value = serde_json::from_str(&txt)?;
+        if let Some(data) = json["result"]["data"].as_str() {
+            let bytes = base64::engine::general_purpose::STANDARD.decode(data)?;
+            std::fs::write("debugchrome.png", bytes)?;
+            Command::new("powershell")
+                .args(["-NoProfile", "-Command", "Start-Process debugchrome.png"])
+                .status()
+                .ok();
+            log::debug!("Screenshot saved to debugchrome.png");
+            break;
         }
     }
-    //std::thread::sleep(std::time::Duration::from_secs(30));
     Ok(())
 }
+
+use futures::stream::{FuturesUnordered, StreamExt};
+use tokio_tungstenite::connect_async;
 
 async fn search_tabs_for_bang_id(
     search_id: &str,
 ) -> Result<Option<(String, String, String)>, Box<dyn std::error::Error + Send + Sync>> {
     log::debug!("Searching for bangId = {}", search_id);
     let uses_session = true;
+
     // Fetch the list of tabs
     let response = reqwest::get("http://localhost:9222/json").await?;
     let tabs: Vec<serde_json::Value> = response.json().await?;
-    let results = Arc::new(std::sync::Mutex::new(None)); // Shared result storage
+    let mut futures = FuturesUnordered::new();
 
-    // Process tabs in parallel using rayon
-    tabs.par_iter()
-        .map(|tab| {
-            let tab_url = tab["url"].as_str().unwrap_or("<no url>");
-            let target_id = tab["id"].as_str().unwrap_or("<no id>").to_string();
-            let title = tab["title"].as_str().unwrap_or("<no title>").to_string();
-            let page_url = tab["url"].as_str().unwrap_or("<no url>").to_string();
+    for tab in tabs {
+        let tab_url = tab["url"].as_str().unwrap_or("<no url>").to_string();
+        let target_id = tab["id"].as_str().unwrap_or("<no id>").to_string();
+        let title = tab["title"].as_str().unwrap_or("<no title>").to_string();
+        let page_url = tab["url"].as_str().unwrap_or("<no url>").to_string();
 
-            if is_invalid_url(&page_url) {
-                return;
-            }
+        if is_invalid_url(&page_url) {
+            continue;
+        }
 
-            log::debug!("Searching tab: {}", tab_url);
-            if let Some(ws_url) = tab["webSocketDebuggerUrl"].as_str() {
-                let results = Arc::clone(&results);
+        log::debug!("Searching tab: {}", tab_url);
 
-                // Use a timeout for the WebSocket operation
-                let start_time = std::time::Instant::now();
-                let timeout = Duration::from_secs(5);
+        if let Some(ws_url) = tab["webSocketDebuggerUrl"].as_str() {
+            let ws_url = ws_url.to_string();
+            let search_id = search_id.to_string();
+            let target_id = target_id.clone();
+            let title = title.clone();
+            let page_url = page_url.clone();
 
-                if let Ok((mut socket, _)) = tungstenite::connect(ws_url) {
+            futures.push(async move {
+                if let Ok((mut socket, _)) = connect_async(&ws_url).await {
                     log::debug!("Connected to WebSocket URL: {}", ws_url);
 
                     // Generate a unique ID for this command
@@ -830,80 +825,85 @@ async fn search_tabs_for_bang_id(
 
                     // Send the Runtime.evaluate command to get window.bangId
                     let get_bang_id = if !uses_session {
-                    serde_json::json!({
-                        "id": command_id,
-                        "method": "Runtime.evaluate",
-                        "params": {
-                            "expression": "window.bangId"
-                        }
-                    })
-                } else {
-                    serde_json::json!({
-                        "id": command_id,
-                        "method": "Runtime.evaluate",
-                        "params": {
-                            "expression": "sessionStorage.getItem('bangId')",
-                            "returnByValue": true
-                        }
-                    })
-                };
-                    if socket.send(Message::Text(get_bang_id.to_string().into())).is_ok() {
-                        log::debug!("Sent command to get bangId with id {} {:?}", command_id, get_bang_id);
+                        serde_json::json!({
+                            "id": command_id,
+                            "method": "Runtime.evaluate",
+                            "params": {
+                                "expression": "window.bangId"
+                            }
+                        })
+                    } else {
+                        serde_json::json!({
+                            "id": command_id,
+                            "method": "Runtime.evaluate",
+                            "params": {
+                                "expression": "sessionStorage.getItem('bangId')",
+                                "returnByValue": true
+                            }
+                        })
+                    };
 
-                        // Wait for a response with a timeout
-                        while start_time.elapsed() < timeout {
-                            if socket.can_read() {
-                            if let Ok(msg) = socket.read() {
-                                if let Message::Text(txt) = msg {
-                                    log::debug!("Received message: {}", txt);
-                                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&txt) {
-                                        if json["id"] == command_id {
-                                            if let Some(bang_id) = json["result"]["result"]["value"].as_str() {
-                                                if bang_id == search_id {
-                                                    log::debug!(
-                                                        "Found tab with bangId {}: {}",
-                                                        search_id,
-                                                        tab_url
-                                                    );
+                    if socket.send(Message::Text(get_bang_id.to_string().into())).await.is_ok() {
+                        log::debug!(
+                            "Sent command to get bangId with id {} {:?}",
+                            command_id,
+                            get_bang_id
+                        );
 
-                                                    // Store the result and exit
-                                                    match results.lock() {
-                                                        Ok(mut results) => {
-                                                            *results = Some((target_id, title, page_url));
-                                                            return;
-                                                        }
-                                                        Err(_) => {
-                                                            log::debug!("Failed to acquire lock on results");
-                                                        }
+                        // Wait for a response
+                        let timeout_duration = Duration::from_secs(5);
+                        let timeout_future = tokio::time::sleep(timeout_duration);
+                        tokio::pin!(timeout_future);
+
+                        'outer: loop {
+                            tokio::select! {
+                                _ = &mut timeout_future => {
+                                    log::debug!("Timeout while waiting for bangId response.");
+                                    break 'outer;
+                                }
+                                Some(Ok(msg)) = socket.next() => {
+                                    if let Message::Text(txt) = msg {
+                                        log::debug!("Received message: {}", txt);
+                                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&txt) {
+                                            if json["id"] == command_id {
+                                                if let Some(bang_id) =
+                                                    json["result"]["result"]["value"].as_str()
+                                                {
+                                                    if bang_id == search_id {
+                                                        log::debug!(
+                                                            "Found tab with bangId {}: {}",
+                                                            search_id,
+                                                            tab_url
+                                                        );
+                                                        return Some((target_id, title, page_url));
                                                     }
                                                 }
+                                                break; // Exit loop after processing the response
                                             }
-                                            break; // Exit loop after processing the response
                                         }
                                     }
                                 }
-                            }
+                                else => {
+                                    log::debug!("WebSocket stream ended unexpectedly.");
+                                    break;
+                                }
                             }
                         }
                     }
                 }
-
-                log::debug!(
-                    "{} or no matching response while searching tab with WebSocket URL: {}",
-                    ws_url,title
-                );
-            }
-        })
-        .collect::<Vec<_>>(); // Wait for all tasks to complete
-
-    // Check if a result was found
-    if let Some(url) = &*results.lock().unwrap() {
-        log::debug!("Found tab with bangId {}: {:?}", search_id, url);
-        return Ok(Some(url.clone()));
-    } else {
-        log::debug!("No tab found with bangId = {}", search_id);
+                None
+            });
+        }
     }
 
+    // Process all futures and return the first match
+    while let Some(result) = futures.next().await {
+        if let Some(tab_info) = result {
+            return Ok(Some(tab_info));
+        }
+    }
+
+    log::debug!("No tab found with bangId = {}", search_id);
     Ok(None)
 }
 
@@ -918,7 +918,7 @@ async fn activate_tab(target_id: &str) -> Result<(), Box<dyn std::error::Error>>
         .ok_or("No WebSocket URL")?;
 
     // Connect to the WebSocket
-    let (mut socket, _) = tungstenite::connect(ws_url)?;
+    let (mut socket, _) = tokio_tungstenite::connect_async(ws_url).await?;
 
     // Send the Target.activateTarget command
     let activate_command = serde_json::json!({
@@ -926,7 +926,9 @@ async fn activate_tab(target_id: &str) -> Result<(), Box<dyn std::error::Error>>
         "method": "Target.activateTarget",
         "params": { "targetId": target_id }
     });
-    socket.send(Message::Text(activate_command.to_string().into()))?;
+    socket
+        .send(Message::Text(activate_command.to_string().into()))
+        .await?;
     log::debug!("Activated tab with targetId: {}", target_id);
 
     Ok(())
@@ -1030,14 +1032,16 @@ fn find_chrome_hwnd_by_title(title: &str) -> Option<HWND> {
 }
 
 #[allow(dead_code)]
-fn set_tab_title(target_id: &str, new_title: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn set_tab_title(target_id: &str, new_title: &str) -> Result<(), Box<dyn std::error::Error>> {
     let socket_url = format!("ws://localhost:9222/devtools/page/{}", target_id);
-    let (mut socket, _) = tungstenite::connect(&socket_url)?;
+    let (mut socket, _) = connect_async(&socket_url).await?;
     let enable = serde_json::json!({
         "id": 1,
         "method": "Runtime.enable"
     });
-    socket.write(Message::Text(enable.to_string().into()))?;
+    socket
+        .send(Message::Text(enable.to_string().into()))
+        .await?;
     // JavaScript to set the document title
     let id = get_unique_id();
     let set_title_script = format!("document.title = '{}';", new_title);
@@ -1049,28 +1053,37 @@ fn set_tab_title(target_id: &str, new_title: &str) -> Result<(), Box<dyn std::er
         }
     });
 
-    socket.send(Message::Text(set_title_command.to_string().into()))?;
-    // 5) **Drain** until we see our eval response
+    socket
+        .send(Message::Text(set_title_command.to_string().into()))
+        .await?;
+    // Drain until we see our eval response
+    let timeout_duration = Duration::from_secs(5); // Set a timeout duration
+    let timeout_future = tokio::time::sleep(timeout_duration);
+    tokio::pin!(timeout_future);
 
-    match socket.read()? {
-        Message::Text(txt) => {
-            if let Ok(msg) = serde_json::from_str::<Value>(&txt) {
-                // look for our eval_id
-                if msg["id"].as_i64() == Some(id.try_into().unwrap()) {
+    'outer: while let Some(Ok(msg)) = tokio::select! {
+        _ = &mut timeout_future => {
+            log::debug!("Timeout while waiting for title set response.");
+            break 'outer;
+        }
+        msg = socket.next() => msg
+    } {
+        if let Message::Text(txt) = msg {
+            if let Ok(json) = serde_json::from_str::<Value>(&txt) {
+                if json["id"].as_i64() == Some(id.try_into().unwrap()) {
                     log::debug!("✅ title set response: {}", txt);
+                    break;
                 }
             }
         }
-        _ => {}
     }
 
-    log::debug!("{:?}", socket.read()?); // Read the response
     log::debug!("Set tab {} title to: {}", target_id, new_title);
 
     Ok(())
 }
 
-use futures_util::{SinkExt, StreamExt};
+use futures_util::SinkExt;
 #[cfg(target_os = "windows")]
 use winapi::um::winuser::{SW_RESTORE, SetForegroundWindow, ShowWindow};
 
@@ -1177,9 +1190,9 @@ fn launch_chrome(user_data_dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn refresh_tab(target_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn refresh_tab(target_id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let socket_url = format!("ws://localhost:9222/devtools/page/{}", target_id);
-    let (mut socket, _) = tungstenite::connect(&socket_url)?;
+    let (mut socket, _) = connect_async(&socket_url).await?;
 
     // Send the Page.reload command
     let reload_command = serde_json::json!({
@@ -1188,13 +1201,24 @@ fn refresh_tab(target_id: &str) -> Result<(), Box<dyn std::error::Error>> {
         "params": {}
     });
 
-    socket.send(Message::Text(reload_command.to_string().into()))?;
+    socket
+        .send(Message::Text(reload_command.to_string().into()))
+        .await?;
     log::debug!("Sent command to refresh tab with targetId: {}", target_id);
 
     // Optionally, wait for a response to confirm the reload
-    if let Ok(msg) = socket.read() {
-        if let Message::Text(txt) = msg {
-            log::debug!("Received response: {}", txt);
+    let timeout_duration = Duration::from_secs(5); // Set a timeout duration
+    let timeout_future = tokio::time::sleep(timeout_duration);
+    tokio::pin!(timeout_future);
+
+    tokio::select! {
+        _ = &mut timeout_future => {
+            log::debug!("Timeout while waiting for response.");
+        }
+        Some(Ok(msg)) = socket.next() => {
+            if let Message::Text(txt) = msg {
+                log::debug!("Received response: {}", txt);
+            }
         }
     }
 
@@ -1217,29 +1241,47 @@ async fn close_tab_by_target_id(target_id: &str) -> Result<(), Box<dyn std::erro
         "params": { "targetId": target_id }
     });
 
-    let max_retries = 5;
+    let max_retries = 20;
     let mut attempts = 0;
 
     while attempts < max_retries {
-        if socket.send(Message::Text(close_command.to_string().into())).await.is_ok() {
+        if socket
+            .send(Message::Text(close_command.to_string().into()))
+            .await
+            .is_ok()
+        {
             log::debug!("Sent command to close tab with targetId: {}", target_id);
 
-            // Wait for a response to confirm the tab was closed
-            if let Some(Ok(Message::Text(txt))) = socket.next().await {
-                log::debug!("Received response: {}", txt);
-                let json: serde_json::Value = serde_json::from_str(&txt)?;
-                if json["id"] == close_command["id"] {
-                    log::debug!("Tab with targetId {} closed successfully.", target_id);
-                    break;
-                } else {
-                    log::debug!("Failed to close tab with targetId: {}", target_id);
-                    if let Ok(mut file) = fs::OpenOptions::new()
-                        .append(true)
-                        .create(true)
-                        .open("debugchrome_error.log")
-                    {
-                        writeln!(file, "Failed to close tab with targetId: {}", target_id).ok();
+            // Wait for a response to confirm the tab was closed with a timeout
+            let timeout_duration = Duration::from_secs(5);
+            let response = tokio::time::timeout(timeout_duration, socket.next()).await;
+
+            match response {
+                Ok(Some(Ok(Message::Text(txt)))) => {
+                    log::debug!("Received response: {}", txt);
+                    let json: serde_json::Value = serde_json::from_str(&txt)?;
+                    if json["id"] == close_command["id"] {
+                        log::debug!("Tab with targetId {} closed successfully.", target_id);
+                        break;
+                    } else {
+                        log::debug!("Failed to close tab with targetId: {}", target_id);
+                        if let Ok(mut file) = fs::OpenOptions::new()
+                            .append(true)
+                            .create(true)
+                            .open("debugchrome_error.log")
+                        {
+                            writeln!(file, "Failed to close tab with targetId: {}", target_id).ok();
+                        }
                     }
+                }
+                Ok(Some(_)) => {
+                    log::debug!("Unexpected message received while closing tab.");
+                }
+                Ok(None) => {
+                    log::debug!("WebSocket stream ended unexpectedly.");
+                }
+                Err(_) => {
+                    log::debug!("Timeout while waiting for response to close tab.");
                 }
             }
         }
@@ -1265,9 +1307,12 @@ async fn close_tab_by_target_id(target_id: &str) -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
-fn set_bang_id_session(target_id: &str, bang_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn set_bang_id_session(
+    target_id: &str,
+    bang_id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let socket_url = format!("ws://localhost:9222/devtools/page/{}", target_id);
-    let (mut socket, _) = tungstenite::connect(&socket_url)?;
+    let (mut socket, _) = connect_async(&socket_url).await?;
 
     // Set the bangId in sessionStorage
     let set_bang_id = serde_json::json!({
@@ -1277,7 +1322,9 @@ fn set_bang_id_session(target_id: &str, bang_id: &str) -> Result<(), Box<dyn std
             "expression": format!("sessionStorage.setItem('bangId', '{}');", bang_id),
         }
     });
-    socket.send(Message::Text(set_bang_id.to_string().into()))?;
+    socket
+        .send(Message::Text(set_bang_id.to_string().into()))
+        .await?;
     log::debug!("Set sessionStorage.bangId to {}", bang_id);
 
     // Verify that the bangId was set
@@ -1288,14 +1335,15 @@ fn set_bang_id_session(target_id: &str, bang_id: &str) -> Result<(), Box<dyn std
             "expression": "sessionStorage.getItem('bangId')",
         }
     });
-    socket.send(Message::Text(verify_bang_id.to_string().into()))?;
+    socket
+        .send(Message::Text(verify_bang_id.to_string().into()))
+        .await?;
     log::debug!("Sent command to verify bangId");
 
     // Wait for the response
-    let start_time = std::time::Instant::now();
-    let timeout = std::time::Duration::from_secs(5);
-    while start_time.elapsed() < timeout {
-        if let Ok(msg) = socket.read() {
+    let timeout_duration = Duration::from_secs(5);
+    let timeout_future = tokio::time::timeout(timeout_duration, async {
+        while let Some(Ok(msg)) = socket.next().await {
             if let Message::Text(txt) = msg {
                 log::debug!("Received message: {}", txt);
                 let json: serde_json::Value = serde_json::from_str(&txt)?;
@@ -1316,10 +1364,13 @@ fn set_bang_id_session(target_id: &str, bang_id: &str) -> Result<(), Box<dyn std
                 }
             }
         }
-    }
+        Err("Timeout while verifying bangId".into())
+    });
 
-    log::debug!("Timeout while verifying bangId");
-    return Err("Timeout while verifying bangId".into());
+    timeout_future.await.unwrap_or_else(|_| {
+        log::debug!("Timeout while verifying bangId");
+        Err("Timeout while verifying bangId".into())
+    })
 }
 
 fn spawn_timeout_closer(
@@ -1431,14 +1482,14 @@ fn adjust_bounds_to_monitor(
         let monitor = &monitors[monitor_index];
         // let monitor_width = monitor.rect.right - monitor.rect.left;
         // let monitor_height = monitor.rect.bottom - monitor.rect.top;
- 
- log::debug!(
-    "Monitor bounds: left={}, top={}, right={}, bottom={}",
-    monitor.rect.left,
-    monitor.rect.top,
-    monitor.rect.right,
-    monitor.rect.bottom
-);
+
+        log::debug!(
+            "Monitor bounds: left={}, top={}, right={}, bottom={}",
+            monitor.rect.left,
+            monitor.rect.top,
+            monitor.rect.right,
+            monitor.rect.bottom
+        );
         // Adjust bounds relative to the monitor
         let x = monitor.rect.left + x;
         let y = monitor.rect.top + y;
@@ -1452,15 +1503,15 @@ fn adjust_bounds_to_monitor(
             (x, y, w, h)
         };
         if dpi_scaling_enabled {
-        log::debug!(
-            "Monitor DPI scaling: {}, Adjusted bounds: x={}, y={}, w={}, h={}",
-            monitor.dpi_scaling,
-            adjusted_x,
-            adjusted_y,
-            adjusted_w,
-            adjusted_h
-        );
-    }
+            log::debug!(
+                "Monitor DPI scaling: {}, Adjusted bounds: x={}, y={}, w={}, h={}",
+                monitor.dpi_scaling,
+                adjusted_x,
+                adjusted_y,
+                adjusted_w,
+                adjusted_h
+            );
+        }
 
         Some((adjusted_x, adjusted_y, adjusted_w, adjusted_h))
     }

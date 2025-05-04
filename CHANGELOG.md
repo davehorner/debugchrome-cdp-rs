@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6](https://github.com/davehorner/debugchrome-cdp-rs/compare/v0.1.5...v0.1.6) - 2025-05-04
+
+### Added
+
+- add futures dependency and refactor async functions in main.rs to improve asynchronous handling and timeouts in WebSocket communication
+
 ## [0.1.5](https://github.com/davehorner/debugchrome-cdp-rs/compare/v0.1.4...v0.1.5) - 2025-05-04
 
 ### Added

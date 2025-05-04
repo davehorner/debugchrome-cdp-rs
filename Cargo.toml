@@ -12,7 +12,7 @@ categories = [
 ]
 readme = "README.md"
 name = "debugchrome-cdp-rs"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2024"
 [[bin]]
 name = "debugchrome"
@@ -22,6 +22,7 @@ path = "src/main.rs"
 base64 = "0.22.1"
 chrono = "0.4.41"
 dirs = "6.0.0"
+futures = "0.3.31"
 futures-util = "0.3.31"
 log = "0.4.27"
 rayon = "1.10.0"

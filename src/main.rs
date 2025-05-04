@@ -15,6 +15,29 @@ use futures_util::TryFutureExt;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
+#[cfg(target_os = "windows")]
+struct MonitorInfo {
+    hmonitor: HMONITOR,
+    rect: RECT,
+    dpi_scaling: f32,
+}
+
+#[cfg(target_os = "windows")]
+impl std::fmt::Debug for MonitorInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "MonitorInfo {{ hmonitor: {:?}, rect: {{ left: {}, top: {}, right: {}, bottom: {} }}, dpi_scaling: {} }}",
+            self.hmonitor,
+            self.rect.left,
+            self.rect.top,
+            self.rect.right,
+            self.rect.bottom,
+            self.dpi_scaling
+        )
+    }
+}
+
 // Global atomic counter for unique IDs
 static COMMAND_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
@@ -22,6 +45,7 @@ fn get_unique_id() -> usize {
     COMMAND_ID_COUNTER.fetch_add(1, Ordering::SeqCst)
 }
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 fn bring_chrome_to_front_and_resize_with_powershell(bounds: Option<(i32, i32, i32, i32)>) {
     let base_script = r#"
         $chrome = Get-Process chrome | Where-Object {
@@ -117,7 +141,17 @@ async fn main() -> std::io::Result<()> {
         }
     }
     let log_file_path = "debugchrome.log";
-    let log_file = File::create(log_file_path)?;
+    let append_log = if let Ok(metadata) = fs::metadata(log_file_path) {
+        metadata.len() <= 5 * 1024 * 1024 // Check if the file size is 5 MB or less
+    } else {
+        true // Default to append if metadata cannot be retrieved
+    };
+
+    let log_file = if append_log {
+        fs::OpenOptions::new().append(true).create(true).open(log_file_path)?
+    } else {
+        File::create(log_file_path)?
+    };
     WriteLogger::init(LevelFilter::Debug, Config::default(), log_file).unwrap();
 
     if args.len() > 1 {
@@ -279,8 +313,14 @@ async fn main() -> std::io::Result<()> {
         let screenshot = bangs.get("screenshot").is_some();
         let timeout_seconds = bangs.get("timeout").and_then(|v| v.parse::<u64>().ok());
         let monitor_index = bangs.get("monitor").and_then(|v| v.parse::<usize>().ok());
+        let dpi_scaling_enabled = bangs
+            .get("dpi")
+            .map(|v| v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        log::debug!("DPI scaling enabled: {}", dpi_scaling_enabled);
+
         #[cfg(target_os = "windows")]
-        let bounds = get_screen_bounds(&bangs, monitor_index);
+        let bounds = get_screen_bounds(&bangs, monitor_index, dpi_scaling_enabled);
         #[cfg(not(target_os = "windows"))]
         let bounds: Option<(i32, i32, i32, i32)> = None;
         log::debug!("bangs: {:?}", bangs);
@@ -302,13 +342,13 @@ async fn main() -> std::io::Result<()> {
                 if let Err(e) = activate_tab(&target_id).await {
                     log::debug!("Failed to activate tab: {}", e);
                 }
-                if let Some((x, y, w, h)) = bounds {
-                    println!("Setting window bounds: x={}, y={}, w={}, h={}", x, y, w, h);
-                    #[cfg(target_os = "windows")]
-                    set_window_bounds(&target_id, x, y, w, h).await.ok();
-                    #[cfg(target_os = "windows")]
-                    bring_chrome_to_front_and_resize_with_powershell(bounds);
-                }
+                // if let Some((x, y, w, h)) = bounds {
+                //     println!("Setting window bounds: x={}, y={}, w={}, h={}", x, y, w, h);
+                //     #[cfg(target_os = "windows")]
+                //     set_window_bounds(&target_id, x, y, w, h).await.ok();
+                //     #[cfg(target_os = "windows")]
+                //     bring_chrome_to_front_and_resize_with_powershell(bounds);
+                // }
 
                 // if let Err(e) = set_tab_title(&target_id, &target_id){
                 //     log::debug!("Failed to set tab title: {}", e);
@@ -358,12 +398,12 @@ async fn main() -> std::io::Result<()> {
         #[cfg(target_os = "windows")]
         finalize_actions(previous_window, keep_focus);
         if let Ok(target_id) = result {
-            if let Some((x, y, w, h)) = bounds {
-                #[cfg(target_os = "windows")]
-                set_window_bounds(&target_id, x, y, w, h).await.ok();
-                #[cfg(target_os = "windows")]
-                bring_chrome_to_front_and_resize_with_powershell(bounds);
-            }
+            // if let Some((x, y, w, h)) = bounds {
+            //     #[cfg(target_os = "windows")]
+            //     set_window_bounds(&target_id, x, y, w, h).await.ok();
+            //     #[cfg(target_os = "windows")]
+            //     bring_chrome_to_front_and_resize_with_powershell(bounds);
+            // }
             // if let Some(hwnd) = find_chrome_hwnd_by_title(&target_id) {
             //     bring_hwnd_to_front(hwnd);
             // } else {
@@ -398,19 +438,30 @@ async fn main() -> std::io::Result<()> {
                 spawn_timeout_closer(target_id.clone(), timeout_seconds).ok();
             }
         } else {
-            Command::new("cmd")
-                .args([
-                    "/C",
-                    "start",
-                    "",
-                    "chrome.exe",
-                    "--remote-debugging-port=9222",
-                    "--enable-automation",
-                    "--no-first-run",
-                    &format!("--user-data-dir={}", user_data_dir.display()),
-                    &translated,
-                ])
-                .spawn()?;
+            let window_position = if let Some((x, y, _, _)) = bounds {
+                Some(format!("--window-position={},{}", x, y))
+            } else {
+                None
+            };
+
+            let window_size = if let Some((_, _, w, h)) = bounds {
+                Some(format!("--window-size={},{}", w, h))
+            } else {
+                None
+            };
+
+            let mut args = String::from("/C start  chrome.exe --remote-debugging-port=9222 --enable-automation --no-first-run");
+            args.push_str(&format!(" --user-data-dir={} {}", user_data_dir.display(), clean_url));
+
+            if let Some(position) = window_position {
+                args.push_str(&format!(" {}", position));
+            }
+
+            if let Some(size) = window_size {
+                args.push_str(&format!(" {}", size));
+            }
+
+            Command::new("cmd").args(args.split_whitespace()).spawn()?;
         }
 
         log::debug!("Requested debug Chrome with URL: {}", translated);
@@ -428,7 +479,7 @@ async fn main() -> std::io::Result<()> {
 }
 async fn open_window_via_devtools(
     clean_url: &str,
-    _bangs: &std::collections::HashMap<String, String>,
+    bangs: &std::collections::HashMap<String, String>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let response = reqwest::get("http://localhost:9222/json/version").await?;
     let version: serde_json::Value = response.json().await?;
@@ -437,7 +488,6 @@ async fn open_window_via_devtools(
         .ok_or("No WebSocket URL")?;
     let (socket, _) = tokio_tungstenite::connect_async(ws_url).await?;
     let mut socket = socket;
-
     // Step 1: Create a new browser context
     let create_context = serde_json::json!({
         "id": 1,
@@ -458,20 +508,68 @@ async fn open_window_via_devtools(
         }
         _ => None,
     };
+    let monitor_index = bangs.get("monitor").and_then(|v| v.parse::<usize>().ok());
+    let dpi_scaling_enabled = bangs
+            .get("dpi")
+            .map(|v| v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+let (left, top, width, height, include_bounds) = if let Some(bounds) = get_screen_bounds(&bangs, monitor_index, dpi_scaling_enabled) {
+    (bounds.0, bounds.1, bounds.2, bounds.3, true)
+} else {
+    (0, 0, 0, 0, false) // Indicate that bounds should not be included
+};
 
+println!("{:?} Bounds: left={}, top={}, width={}, height={}, include_bounds={}",monitor_index, left, top, width, height, include_bounds);
+let unique = get_unique_id();
     if let Some(context_id) = browser_context_id {
-        // Step 2: Create a new target (window) in the new browser context
-        let create_target = serde_json::json!({
-            "id": 2,
-            "method": "Target.createTarget",
-            "params": {
-                "url": clean_url,
-                "browserContextId": context_id
-            }
-        });
-        socket
-            .send(tungstenite::Message::Text(create_target.to_string().into()))
-            .await?;
+if include_bounds {
+    let create_target = serde_json::json!({
+        "id": unique,
+        "method": "Target.createTarget",
+        "params": {
+            "url": clean_url,
+            "browserContextId": context_id,
+            "left": left,
+            "top": top,
+            "width": width,
+            "height": height,
+            "newWindow": true
+        }
+    });
+    socket
+        .send(tungstenite::Message::Text(create_target.to_string().into()))
+        .await?;
+} else {
+    let create_target = serde_json::json!({
+        "id": unique,
+        "method": "Target.createTarget",
+        "params": {
+            "url": clean_url,
+            "browserContextId": context_id,
+            "newWindow": true
+        }
+    });
+    socket
+        .send(tungstenite::Message::Text(create_target.to_string().into()))
+        .await?;
+}
+        // // Step 2: Create a new target (window) in the new browser context
+        // let create_target = serde_json::json!({
+        //     "id": 2,
+        //     "method": "Target.createTarget",
+        //     "params": {
+        //         "url": clean_url,
+        //         "browserContextId": context_id,
+        //         "left": left,
+        //         "top": top,
+        //         "width": width,
+        //         "height": height,
+        //         "newWindow": true
+        //     }
+        // });
+        // socket
+        //     .send(tungstenite::Message::Text(create_target.to_string().into()))
+        //     .await?;
 
         // Step 3: Wait for the response to get the targetId
         if let Some(Ok(tungstenite::Message::Text(txt))) = socket.next().await {
@@ -488,6 +586,7 @@ async fn open_window_via_devtools(
 fn get_screen_bounds(
     bangs: &std::collections::HashMap<String, String>,
     monitor_index: Option<usize>,
+    dpi_scaling_enabled: bool,
 ) -> Option<(i32, i32, i32, i32)> {
     #[cfg(not(target_os = "windows"))]
     {
@@ -509,16 +608,18 @@ fn get_screen_bounds(
         let w = bangs
             .get("w")
             .and_then(|v| parse_dimension(v, screen_width))
-            .unwrap_or(1024);
+            .unwrap_or(screen_width);
         let h = bangs
             .get("h")
             .and_then(|v| parse_dimension(v, screen_height))
-            .unwrap_or(768);
+            .unwrap_or(screen_height);
+        print!("params: x: {}, y: {}, w: {}, h: {}", x, y, w, h);
         if let Some(index) = monitor_index {
+            println!(" monitor_index: {}", index);
             if let Some((adjusted_x, adjusted_y, adjusted_w, adjusted_h)) =
-                adjust_bounds_to_monitor(index, x, y, w, h)
+                adjust_bounds_to_monitor(index, x, y, w, h, dpi_scaling_enabled)
             {
-                log::debug!(
+                println!(
                     "Adjusted bounds to monitor {}: x={}, y={}, w={}, h={}",
                     index,
                     adjusted_x,
@@ -529,7 +630,6 @@ fn get_screen_bounds(
                 return Some((adjusted_x, adjusted_y, adjusted_w, adjusted_h));
             }
         }
-        log::debug!("x: {}, y: {}, w: {}, h: {}", x, y, w, h);
         if bangs.contains_key("x")
             && bangs.contains_key("y")
             && bangs.contains_key("w")
@@ -600,6 +700,7 @@ async fn open_tab_via_devtools_and_return_id(
     Err("Failed to get targetId".into())
 }
 
+#[allow(dead_code)]
 async fn set_window_bounds(
     target_id: &str,
     x: i32,
@@ -867,8 +968,8 @@ fn get_screen_resolution(monitor_index: Option<usize>) -> (i32, i32) {
             log::debug!("Monitor index out of bounds, falling back to primary monitor.");
             &monitors[0]
         });
-        let width = monitor.right - monitor.left;
-        let height = monitor.bottom - monitor.top;
+        let width = monitor.rect.right - monitor.rect.left;
+        let height = monitor.rect.bottom - monitor.rect.top;
         (width, height)
     }
 }
@@ -1108,7 +1209,7 @@ async fn close_tab_by_target_id(target_id: &str) -> Result<(), Box<dyn std::erro
     let ws_url = version["webSocketDebuggerUrl"]
         .as_str()
         .ok_or("No WebSocket URL")?;
-    let (mut socket, _) = tungstenite::connect(ws_url)?;
+    let (mut socket, _) = tokio_tungstenite::connect_async(ws_url).await?;
 
     let close_command = serde_json::json!({
         "id": get_unique_id(),
@@ -1116,8 +1217,50 @@ async fn close_tab_by_target_id(target_id: &str) -> Result<(), Box<dyn std::erro
         "params": { "targetId": target_id }
     });
 
-    socket.send(Message::Text(close_command.to_string().into()))?;
-    log::debug!("Sent command to close tab with targetId: {}", target_id);
+    let max_retries = 5;
+    let mut attempts = 0;
+
+    while attempts < max_retries {
+        if socket.send(Message::Text(close_command.to_string().into())).await.is_ok() {
+            log::debug!("Sent command to close tab with targetId: {}", target_id);
+
+            // Wait for a response to confirm the tab was closed
+            if let Some(Ok(Message::Text(txt))) = socket.next().await {
+                log::debug!("Received response: {}", txt);
+                let json: serde_json::Value = serde_json::from_str(&txt)?;
+                if json["id"] == close_command["id"] {
+                    log::debug!("Tab with targetId {} closed successfully.", target_id);
+                    break;
+                } else {
+                    log::debug!("Failed to close tab with targetId: {}", target_id);
+                    if let Ok(mut file) = fs::OpenOptions::new()
+                        .append(true)
+                        .create(true)
+                        .open("debugchrome_error.log")
+                    {
+                        writeln!(file, "Failed to close tab with targetId: {}", target_id).ok();
+                    }
+                }
+            }
+        }
+
+        attempts += 1;
+        log::debug!(
+            "Retrying to close tab with targetId: {} (attempt {}/{})",
+            target_id,
+            attempts,
+            max_retries
+        );
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+
+    if attempts == max_retries {
+        log::debug!(
+            "Failed to close tab with targetId: {} after {} attempts.",
+            target_id,
+            max_retries
+        );
+    }
 
     Ok(())
 }
@@ -1231,17 +1374,25 @@ use winapi::shared::windef::{HMONITOR, RECT};
 use winapi::um::winuser::EnumDisplayMonitors;
 
 #[cfg(target_os = "windows")]
-fn get_monitor_bounds() -> Vec<RECT> {
+fn get_monitor_bounds() -> Vec<MonitorInfo> {
     let mut monitors = Vec::new();
 
     unsafe extern "system" fn monitor_enum_proc(
-        _hmonitor: HMONITOR,
+        hmonitor: HMONITOR,
         _: *mut winapi::shared::windef::HDC__,
         lprc_monitor: *mut RECT,
         lparam: isize,
     ) -> i32 {
-        let monitors = unsafe { &mut *(lparam as *mut Vec<RECT>) };
-        monitors.push(unsafe { *lprc_monitor });
+        let monitors = unsafe { &mut *(lparam as *mut Vec<MonitorInfo>) };
+
+        // Retrieve DPI scaling for the monitor
+        let dpi_scaling = get_dpi_for_monitor(hmonitor);
+
+        monitors.push(MonitorInfo {
+            hmonitor,
+            rect: unsafe { *lprc_monitor },
+            dpi_scaling, // Populate DPI scaling
+        });
         1 // Continue enumeration
     }
 
@@ -1263,6 +1414,7 @@ fn adjust_bounds_to_monitor(
     y: i32,
     w: i32,
     h: i32,
+    dpi_scaling_enabled: bool,
 ) -> Option<(i32, i32, i32, i32)> {
     #[cfg(not(target_os = "windows"))]
     {
@@ -1276,16 +1428,69 @@ fn adjust_bounds_to_monitor(
             return None; // Invalid monitor index
         }
 
-        let monitor = monitors[monitor_index];
-        let monitor_width = monitor.right - monitor.left;
-        let monitor_height = monitor.bottom - monitor.top;
-
+        let monitor = &monitors[monitor_index];
+        // let monitor_width = monitor.rect.right - monitor.rect.left;
+        // let monitor_height = monitor.rect.bottom - monitor.rect.top;
+ 
+ log::debug!(
+    "Monitor bounds: left={}, top={}, right={}, bottom={}",
+    monitor.rect.left,
+    monitor.rect.top,
+    monitor.rect.right,
+    monitor.rect.bottom
+);
         // Adjust bounds relative to the monitor
-        let adjusted_x = monitor.left + x;
-        let adjusted_y = monitor.top + y;
-        let adjusted_w = w.min(monitor_width);
-        let adjusted_h = h.min(monitor_height);
+        let x = monitor.rect.left + x;
+        let y = monitor.rect.top + y;
+        // let w = w.min(monitor_width);
+        // let h = h.min(monitor_height);
+
+        // Apply DPI scaling if enabled
+        let (adjusted_x, adjusted_y, adjusted_w, adjusted_h) = if dpi_scaling_enabled {
+            adjust_for_dpi(x, y, w, h, monitor.dpi_scaling)
+        } else {
+            (x, y, w, h)
+        };
+        if dpi_scaling_enabled {
+        log::debug!(
+            "Monitor DPI scaling: {}, Adjusted bounds: x={}, y={}, w={}, h={}",
+            monitor.dpi_scaling,
+            adjusted_x,
+            adjusted_y,
+            adjusted_w,
+            adjusted_h
+        );
+    }
 
         Some((adjusted_x, adjusted_y, adjusted_w, adjusted_h))
     }
+}
+
+#[cfg(target_os = "windows")]
+use winapi::um::shellscalingapi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+#[cfg(target_os = "windows")]
+use winapi::um::winnt::HRESULT;
+
+#[cfg(target_os = "windows")]
+fn get_dpi_for_monitor(monitor: HMONITOR) -> f32 {
+    unsafe {
+        let mut dpi_x = 0;
+        let mut dpi_y = 0;
+        let result: HRESULT = GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y);
+        if result == 0 {
+            dpi_x as f32 / 96.0 // Convert DPI to scaling factor (96 DPI = 100%)
+        } else {
+            1.0 // Default scaling factor if DPI retrieval fails
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn adjust_for_dpi(x: i32, y: i32, w: i32, h: i32, dpi_scaling: f32) -> (i32, i32, i32, i32) {
+    (
+        (x as f32 / dpi_scaling).round() as i32,
+        (y as f32 / dpi_scaling).round() as i32,
+        (w as f32 / dpi_scaling).round() as i32,
+        (h as f32 / dpi_scaling).round() as i32,
+    )
 }

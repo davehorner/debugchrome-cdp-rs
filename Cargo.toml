@@ -12,7 +12,7 @@ categories = [
 ]
 readme = "README.md"
 name = "debugchrome-cdp-rs"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 [[bin]]
 name = "debugchrome"
@@ -32,4 +32,4 @@ tokio = { version = "1.44.2", features = ["macros", "rt-multi-thread"] }
 tokio-tungstenite = "0.26.2"
 tungstenite = "0.26.2"
 url = "2.5.4"
-winapi = { version = "0.3.9", features = ["winuser"] }
+winapi = { version = "0.3.9", features = ["winuser","shellscalingapi"] }

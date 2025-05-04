@@ -9,7 +9,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use std::{env, fs, io};
-use tokio::sync::mpsc;
 use tungstenite::Message;
 
 use futures_util::TryFutureExt;
@@ -121,7 +120,8 @@ async fn main() -> std::io::Result<()> {
     WriteLogger::init(LevelFilter::Debug, Config::default(), log_file).unwrap();
 
     log::debug!("Starting Debug Chrome...");
-    log::debug!("Logging initialized. Log file: {}", log_file_path);
+    let log_file_path = std::fs::canonicalize(log_file_path)?.display().to_string();
+    println!("Log file: {}", log_file_path);
 
     let args: Vec<String> = env::args().collect();
     if args.len() > 2 && args[1] == "--close-target" {
@@ -130,7 +130,7 @@ async fn main() -> std::io::Result<()> {
             match arg.parse::<u64>() {
                 Ok(value) => value,
                 Err(_) => {
-                    log::debug!("Invalid timeout value provided: {}", arg);
+                    println!("Invalid timeout value provided: {}", arg);
                     0
                 }
             }
@@ -168,19 +168,19 @@ async fn main() -> std::io::Result<()> {
         );
         let mut file = File::create("debugchrome.reg")?;
         file.write_all(reg_content.as_bytes())?;
-        log::debug!("Written debugchrome.reg with path: {}", exe_path);
+        println!("Written debugchrome.reg with path: {}", exe_path);
         if let Err(e) = Command::new("regedit")
             .args(["/s", "debugchrome.reg"])
             .spawn()
             .and_then(|mut child| child.wait())
         {
-            log::debug!("Failed to register debugchrome protocol: {}", e);
-            log::debug!(
+            println!("Failed to register debugchrome protocol: {}", e);
+            println!(
                 "Try running this program in an elevated command prompt (Run as Administrator)."
             );
-            log::debug!("or double click the reg file.");
+            println!("or double click the reg file.");
         } else {
-            log::debug!("Registered debugchrome protocol successfully.");
+            println!("Registered debugchrome protocol successfully.");
         }
         return Ok(());
     }
@@ -226,7 +226,6 @@ async fn main() -> std::io::Result<()> {
         // Check if the !keep_focus parameter is present
         keep_focus = bangs.get("keep_focus").is_some();
         log::debug!("keep_focus: {}", keep_focus);
-        println!("keep_focus: {}", keep_focus);
 
         // Check if the CDP server is running
         if !is_cdp_server_running().await {
@@ -246,7 +245,6 @@ async fn main() -> std::io::Result<()> {
         }
 
         // Check if the bangId is already open
-        println!("clean: {}", clean_url);
         let parsed_url = match url::Url::parse(&clean_url) {
             Ok(url) => url,
             Err(e) => {
@@ -255,10 +253,10 @@ async fn main() -> std::io::Result<()> {
                 return Err(std::io::Error::new(std::io::ErrorKind::Other, e));
             }
         };
-        println!("Parsed URL: {}", parsed_url);
         let open_window = bangs.get("openwindow").is_some();
         let close = bangs.get("close").is_some();
         let refresh = bangs.get("refresh").is_some();
+        let screenshot = bangs.get("screenshot").is_some();
         let timeout_seconds = bangs.get("timeout").and_then(|v| v.parse::<u64>().ok());
         let monitor_index = bangs.get("monitor").and_then(|v| v.parse::<usize>().ok());
         #[cfg(target_os = "windows")]
@@ -269,7 +267,7 @@ async fn main() -> std::io::Result<()> {
         log::debug!("Parsed URL: {}", parsed_url);
         if let Some(bang_id) = bangs.get("id").cloned() {
             log::debug!("Searching for bangId: {}", bang_id);
-            if let Some((target_id, title, url)) = search_tabs_for_bang_id(&bang_id)
+            if let Some((target_id, title, _url)) = search_tabs_for_bang_id(&bang_id)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
                 .await?
             {
@@ -351,15 +349,17 @@ async fn main() -> std::io::Result<()> {
             // } else {
             //     log::debug!("Failed to find Chrome window with title '{}'.",&target_id);
             // }
-            if let Err(e) = take_screenshot(&target_id) {
-                log::debug!("Failed to take screenshot: {}", e);
-                // std::thread::sleep(std::time::Duration::from_secs(3)); // Ensure sleep even on error
-                #[cfg(target_os = "windows")]
-                finalize_actions(previous_window, keep_focus);
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("{}", e),
-                ));
+            if screenshot {
+                if let Err(e) = take_screenshot(&target_id) {
+                    log::debug!("Failed to take screenshot: {}", e);
+                    // std::thread::sleep(std::time::Duration::from_secs(3)); // Ensure sleep even on error
+                    #[cfg(target_os = "windows")]
+                    finalize_actions(previous_window, keep_focus);
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("{}", e),
+                    ));
+                }
             }
 
             // Call set_bang_id to set the bangId in the tab
@@ -373,7 +373,7 @@ async fn main() -> std::io::Result<()> {
                     timeout_seconds,
                     target_id
                 );
-                spawn_timeout_closer(target_id.clone(), timeout_seconds);
+                spawn_timeout_closer(target_id.clone(), timeout_seconds).ok();
             }
         } else {
             Command::new("cmd")
@@ -393,12 +393,12 @@ async fn main() -> std::io::Result<()> {
 
         log::debug!("Requested debug Chrome with URL: {}", translated);
     } else {
-        log::debug!("Usage:");
-        log::debug!(
+        println!("Usage:");
+        println!(
             "  debugchrome.exe \"debugchrome:https://www.rust-lang.org?x=0&y=0&w=800&h=600&!id=123\""
         );
-        log::debug!("  debugchrome.exe --search 123");
-        log::debug!("  debugchrome.exe --register");
+        println!("  debugchrome.exe --search 123");
+        println!("  debugchrome.exe --register");
     }
     #[cfg(target_os = "windows")]
     finalize_actions(previous_window, keep_focus);
@@ -406,7 +406,7 @@ async fn main() -> std::io::Result<()> {
 }
 async fn open_window_via_devtools(
     clean_url: &str,
-    bangs: &std::collections::HashMap<String, String>,
+    _bangs: &std::collections::HashMap<String, String>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let response = reqwest::get("http://localhost:9222/json/version").await?;
     let version: serde_json::Value = response.json().await?;
@@ -474,51 +474,50 @@ fn get_screen_bounds(
     }
     #[cfg(target_os = "windows")]
     {
+        let (screen_width, screen_height) = get_screen_resolution(monitor_index);
 
-    let (screen_width, screen_height) = get_screen_resolution(monitor_index);
-
-    let x = bangs
-        .get("x")
-        .and_then(|v| parse_dimension(v, screen_width))
-        .unwrap_or(0);
-    let y = bangs
-        .get("y")
-        .and_then(|v| parse_dimension(v, screen_height))
-        .unwrap_or(0);
-    let w = bangs
-        .get("w")
-        .and_then(|v| parse_dimension(v, screen_width))
-        .unwrap_or(1024);
-    let h = bangs
-        .get("h")
-        .and_then(|v| parse_dimension(v, screen_height))
-        .unwrap_or(768);
-    if let Some(index) = monitor_index {
-        if let Some((adjusted_x, adjusted_y, adjusted_w, adjusted_h)) =
-            adjust_bounds_to_monitor(index, x, y, w, h)
+        let x = bangs
+            .get("x")
+            .and_then(|v| parse_dimension(v, screen_width))
+            .unwrap_or(0);
+        let y = bangs
+            .get("y")
+            .and_then(|v| parse_dimension(v, screen_height))
+            .unwrap_or(0);
+        let w = bangs
+            .get("w")
+            .and_then(|v| parse_dimension(v, screen_width))
+            .unwrap_or(1024);
+        let h = bangs
+            .get("h")
+            .and_then(|v| parse_dimension(v, screen_height))
+            .unwrap_or(768);
+        if let Some(index) = monitor_index {
+            if let Some((adjusted_x, adjusted_y, adjusted_w, adjusted_h)) =
+                adjust_bounds_to_monitor(index, x, y, w, h)
+            {
+                log::debug!(
+                    "Adjusted bounds to monitor {}: x={}, y={}, w={}, h={}",
+                    index,
+                    adjusted_x,
+                    adjusted_y,
+                    adjusted_w,
+                    adjusted_h
+                );
+                return Some((adjusted_x, adjusted_y, adjusted_w, adjusted_h));
+            }
+        }
+        log::debug!("x: {}, y: {}, w: {}, h: {}", x, y, w, h);
+        if bangs.contains_key("x")
+            && bangs.contains_key("y")
+            && bangs.contains_key("w")
+            && bangs.contains_key("h")
         {
-            log::debug!(
-                "Adjusted bounds to monitor {}: x={}, y={}, w={}, h={}",
-                index,
-                adjusted_x,
-                adjusted_y,
-                adjusted_w,
-                adjusted_h
-            );
-            return Some((adjusted_x, adjusted_y, adjusted_w, adjusted_h));
+            Some((x, y, w, h))
+        } else {
+            None
         }
     }
-    log::debug!("x: {}, y: {}, w: {}, h: {}", x, y, w, h);
-    if bangs.contains_key("x")
-        && bangs.contains_key("y")
-        && bangs.contains_key("w")
-        && bangs.contains_key("h")
-    {
-        Some((x, y, w, h))
-    } else {
-        None
-    }
-}
 }
 
 #[cfg(target_os = "windows")]
@@ -537,7 +536,7 @@ fn finalize_actions(previous_window: Option<winapi::shared::windef::HWND>, keep_
 
 async fn open_tab_via_devtools_and_return_id(
     clean_url: &str,
-    bangs: &std::collections::HashMap<String, String>,
+    _bangs: &std::collections::HashMap<String, String>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let response = reqwest::get("http://localhost:9222/json/version").await?;
     let version: serde_json::Value = response.json().await?;
@@ -567,9 +566,6 @@ async fn open_tab_via_devtools_and_return_id(
                     }
                 }
             }
-        }
-        Ok(Some(Err(e))) => {
-            log::debug!("Error reading from WebSocket: {}", e);
         }
         Ok(None) => {
             log::debug!("WebSocket stream ended unexpectedly.");
@@ -666,71 +662,6 @@ fn take_screenshot(target_id: &str) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     //std::thread::sleep(std::time::Duration::from_secs(30));
-    Ok(())
-}
-
-fn set_bang_id(target_id: &str, url: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let parsed = url::Url::parse(url)?;
-    if let Some(bang_id) = parsed
-        .query_pairs()
-        .find(|(k, _)| k == "!id")
-        .map(|(_, v)| v.to_string())
-    {
-        let socket_url = format!("ws://localhost:9222/devtools/page/{}", target_id);
-        let (mut socket, _) = tungstenite::connect(&socket_url)?;
-
-        // Set the bangId
-        let set_bang_id = serde_json::json!({
-            "id": 3,
-            "method": "Runtime.evaluate",
-            "params": {
-                "expression": format!("window.bangId = '{}';", bang_id),
-            }
-        });
-        socket.send(Message::Text(set_bang_id.to_string().into()))?;
-        log::debug!("Set window.bangId to {}", bang_id);
-
-        // Verify that the bangId was set
-        let verify_bang_id = serde_json::json!({
-            "id": 4,
-            "method": "Runtime.evaluate",
-            "params": {
-                "expression": "window.bangId",
-            }
-        });
-        socket.send(Message::Text(verify_bang_id.to_string().into()))?;
-        log::debug!("Sent command to verify bangId");
-
-        // Wait for the response
-        let start_time = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(5);
-        while start_time.elapsed() < timeout {
-            if let Ok(msg) = socket.read() {
-                if let Message::Text(txt) = msg {
-                    log::debug!("Received message: {}", txt);
-                    let json: serde_json::Value = serde_json::from_str(&txt)?;
-                    if json["id"] == 4 {
-                        if let Some(verified_bang_id) = json["result"]["result"]["value"].as_str() {
-                            if verified_bang_id == bang_id {
-                                log::debug!("Successfully verified bangId: {}", verified_bang_id);
-                                return Ok(());
-                            } else {
-                                log::debug!(
-                                    "Mismatch: Expected {}, but got {}",
-                                    bang_id,
-                                    verified_bang_id
-                                );
-                                return Err("Failed to verify bangId".into());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        log::debug!("Timeout while verifying bangId");
-        return Err("Timeout while verifying bangId".into());
-    }
     Ok(())
 }
 
@@ -934,6 +865,7 @@ use winapi::shared::windef::HWND;
 use winapi::um::winuser::{EnumWindows, GetWindowTextA};
 
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 fn find_chrome_hwnd_by_title(title: &str) -> Option<HWND> {
     unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: isize) -> i32 {
         unsafe {
@@ -970,6 +902,7 @@ fn find_chrome_hwnd_by_title(title: &str) -> Option<HWND> {
     if data.1.is_null() { None } else { Some(data.1) }
 }
 
+#[allow(dead_code)]
 fn set_tab_title(target_id: &str, new_title: &str) -> Result<(), Box<dyn std::error::Error>> {
     let socket_url = format!("ws://localhost:9222/devtools/page/{}", target_id);
     let (mut socket, _) = tungstenite::connect(&socket_url)?;
@@ -1015,6 +948,7 @@ use futures_util::{SinkExt, StreamExt};
 use winapi::um::winuser::{SW_RESTORE, SetForegroundWindow, ShowWindow};
 
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 fn bring_hwnd_to_front(hwnd: HWND) {
     if hwnd.is_null() {
         log::debug!("Invalid HWND: Cannot bring to front.");
@@ -1140,51 +1074,6 @@ fn refresh_tab(target_id: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn centralized_websocket_reader(
-    mut socket: tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-    >,
-    sender: mpsc::Sender<serde_json::Value>,
-) {
-    while let Some(msg) = socket.next().await {
-        match msg {
-            Ok(tungstenite::Message::Text(txt)) => {
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&txt) {
-                    if sender.send(json).await.is_err() {
-                        log::debug!("Failed to send message to channel");
-                        break;
-                    }
-                }
-            }
-            Ok(_) => {}
-            Err(e) => {
-                log::debug!("WebSocket read error: {}", e);
-                break;
-            }
-        }
-    }
-}
-fn encode_url(raw_url: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let parsed_url = url::Url::parse(raw_url)?;
-    let mut encoded_url = parsed_url.clone();
-
-    // Rebuild the query string with percent-encoded keys
-    {
-        let mut query_pairs = encoded_url.query_pairs_mut();
-        query_pairs.clear(); // Clear existing query pairs
-
-        for (key, value) in parsed_url.query_pairs() {
-            let encoded_key =
-                url::form_urlencoded::byte_serialize(key.as_bytes()).collect::<String>();
-            let encoded_value =
-                url::form_urlencoded::byte_serialize(value.as_bytes()).collect::<String>();
-            query_pairs.append_pair(&encoded_key, &encoded_value);
-        }
-    }
-
-    Ok(encoded_url.to_string())
-}
-
 async fn close_tab_by_target_id(target_id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let version: serde_json::Value = reqwest::get("http://localhost:9222/json/version")
         .await?
@@ -1291,10 +1180,10 @@ fn spawn_timeout_closer(
 
     #[cfg(target_os = "windows")]
     {
-    Command::new("cmd")
-        .args(args)
-        .creation_flags(0x08000000)
-        .spawn()?;
+        Command::new("cmd")
+            .args(args)
+            .creation_flags(0x08000000)
+            .spawn()?;
     }
 
     log::debug!(
@@ -1364,21 +1253,21 @@ fn adjust_bounds_to_monitor(
     }
     #[cfg(target_os = "windows")]
     {
-    let monitors = get_monitor_bounds();
-    if monitor_index >= monitors.len() {
-        return None; // Invalid monitor index
-    }
+        let monitors = get_monitor_bounds();
+        if monitor_index >= monitors.len() {
+            return None; // Invalid monitor index
+        }
 
-    let monitor = monitors[monitor_index];
-    let monitor_width = monitor.right - monitor.left;
-    let monitor_height = monitor.bottom - monitor.top;
+        let monitor = monitors[monitor_index];
+        let monitor_width = monitor.right - monitor.left;
+        let monitor_height = monitor.bottom - monitor.top;
 
-    // Adjust bounds relative to the monitor
-    let adjusted_x = monitor.left + x;
-    let adjusted_y = monitor.top + y;
-    let adjusted_w = w.min(monitor_width);
-    let adjusted_h = h.min(monitor_height);
+        // Adjust bounds relative to the monitor
+        let adjusted_x = monitor.left + x;
+        let adjusted_y = monitor.top + y;
+        let adjusted_w = w.min(monitor_width);
+        let adjusted_h = h.min(monitor_height);
 
-    Some((adjusted_x, adjusted_y, adjusted_w, adjusted_h))
+        Some((adjusted_x, adjusted_y, adjusted_w, adjusted_h))
     }
 }

@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Loading...</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #4facfe, #00f2fe);
+            color: white;
+            text-align: center;
+        }
+        .timer {
+            font-size: 3rem;
+            font-weight: bold;
+        }
+    </style>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+        });
+    </script>
+</head>
+<body>
+    <div>
+        <p>Redirecting in <span class="timer" id="timer"></span> seconds...</p>
+    </div>
+    <script>
+        // Template variables (replace these dynamically)
+        const cleanUrl = "{{CLEAN_URL}}"; // Replace with actual URL
+        const delayInSeconds = {{DELAY_IN_SECONDS}}; // Replace with actual delay
+        const bangId = "{{BANG_ID}}"; // Replace with actual bangId
+        if (bangId && bangId.length > 0) {
+            window.bangId = bangId;
+        }
+        // Initialize timer
+        let countdown = delayInSeconds;
+        const timerElement = document.getElementById('timer');
+        timerElement.textContent = countdown;
+
+        const interval = setInterval(() => {
+            countdown--;
+            timerElement.textContent = countdown;
+            if (countdown <= 0) {
+                clearInterval(interval);
+                const url = new URL(cleanUrl);
+                if (window.bangId) {
+                    url.hash = `${window.bangId}`;
+                }
+                window.location.href = url.toString();
+            }
+        }, 1000);
+    </script>
+</body>
+</html>

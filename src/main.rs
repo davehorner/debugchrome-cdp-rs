@@ -344,13 +344,13 @@ async fn main() -> std::io::Result<()> {
                 if let Err(e) = activate_tab(&target_id).await {
                     log::debug!("Failed to activate tab: {}", e);
                 }
-                // if let Some((x, y, w, h)) = bounds {
-                //     println!("Setting window bounds: x={}, y={}, w={}, h={}", x, y, w, h);
-                //     #[cfg(target_os = "windows")]
-                //     set_window_bounds(&target_id, x, y, w, h).await.ok();
-                //     #[cfg(target_os = "windows")]
-                //     bring_chrome_to_front_and_resize_with_powershell(bounds);
-                // }
+                if let Some((x, y, w, h)) = bounds {
+                    println!("Setting window bounds: x={}, y={}, w={}, h={}", x, y, w, h);
+                    #[cfg(target_os = "windows")]
+                    set_window_bounds(&target_id, x, y, w, h).await.ok();
+                    #[cfg(target_os = "windows")]
+                    bring_chrome_to_front_and_resize_with_powershell(bounds);
+                }
 
                 // if let Err(e) = set_tab_title(&target_id, &target_id){
                 //     log::debug!("Failed to set tab title: {}", e);
@@ -497,8 +497,9 @@ async fn open_window_via_devtools(
     let (socket, _) = tokio_tungstenite::connect_async(ws_url).await?;
     let mut socket = socket;
     // Step 1: Create a new browser context
+    let unique = get_unique_id();
     let create_context = serde_json::json!({
-        "id": 1,
+        "id": unique,
         "method": "Target.createBrowserContext"
     });
     socket
@@ -529,10 +530,16 @@ async fn open_window_via_devtools(
             (0, 0, 0, 0, false) // Indicate that bounds should not be included
         };
 
-    println!(
-        "{:?} Bounds: left={}, top={}, width={}, height={}, include_bounds={}",
-        monitor_index, left, top, width, height, include_bounds
-    );
+        use base64::engine::general_purpose::STANDARD as base64_engine;
+
+        let bang_id = bangs.get("id").cloned().unwrap_or_default();
+        let html_content = include_str!("../static/initial_payload.html")
+            .replace("{{BANG_ID}}", &bang_id)
+            .replace("{{CLEAN_URL}}", clean_url)
+            .replace("{{DELAY_IN_SECONDS}}", "2");
+        let encoded_html = base64_engine.encode(html_content);
+        let placeholder_url = format!("data:text/html;base64,{}#{}", encoded_html, bang_id);
+        println!("{:?} Bounds: left={}, top={}, width={}, height={}, include_bounds={}",monitor_index, left, top, width, height, include_bounds);
     let unique = get_unique_id();
     if let Some(context_id) = browser_context_id {
         if include_bounds {
@@ -540,7 +547,8 @@ async fn open_window_via_devtools(
                 "id": unique,
                 "method": "Target.createTarget",
                 "params": {
-                    "url": clean_url,
+                    "url": placeholder_url,
+                    // "url": clean_url,
                     "browserContextId": context_id,
                     "left": left,
                     "top": top,
@@ -557,7 +565,8 @@ async fn open_window_via_devtools(
                 "id": unique,
                 "method": "Target.createTarget",
                 "params": {
-                    "url": clean_url,
+                    "url": placeholder_url,
+                    // "url": clean_url,
                     "browserContextId": context_id,
                     "newWindow": true
                 }
@@ -591,6 +600,7 @@ async fn open_window_via_devtools(
         {
             let json: serde_json::Value = serde_json::from_str(&txt)?;
             if let Some(target_id) = json["result"]["targetId"].as_str() {
+                let _ = set_bang_id_session(&target_id, &bangs.get("id").cloned().unwrap_or_default()).await;
                 return Ok(target_id.to_owned());
             }
         }
@@ -803,6 +813,12 @@ async fn search_tabs_for_bang_id(
         let title = tab["title"].as_str().unwrap_or("<no title>").to_string();
         let page_url = tab["url"].as_str().unwrap_or("<no url>").to_string();
 
+        // Check if the tab_url contains the search_id directly
+        if tab_url.contains(&format!("#{}", search_id)) {
+            log::debug!("Found tab with bangId {} in URL: {}", search_id, tab_url);
+            return Ok(Some((target_id, title, page_url)));
+        }
+
         if is_invalid_url(&page_url) {
             continue;
         }
@@ -820,76 +836,169 @@ async fn search_tabs_for_bang_id(
                 if let Ok((mut socket, _)) = connect_async(&ws_url).await {
                     log::debug!("Connected to WebSocket URL: {}", ws_url);
 
-                    // Generate a unique ID for this command
+                    // Try to get window.bangId next
                     let command_id = get_unique_id();
+                    let get_bang_id_window = serde_json::json!({
+                        "id": command_id,
+                        "method": "Runtime.evaluate",
+                        "params": {
+                            "expression": "window.bangId",
+                            "returnByValue": true
+                        }
+                    });
 
-                    // Send the Runtime.evaluate command to get window.bangId
-                    let get_bang_id = if !uses_session {
-                        serde_json::json!({
-                            "id": command_id,
-                            "method": "Runtime.evaluate",
-                            "params": {
-                                "expression": "window.bangId"
-                            }
-                        })
-                    } else {
-                        serde_json::json!({
-                            "id": command_id,
-                            "method": "Runtime.evaluate",
-                            "params": {
-                                "expression": "sessionStorage.getItem('bangId')",
-                                "returnByValue": true
-                            }
-                        })
-                    };
-
-                    if socket.send(Message::Text(get_bang_id.to_string().into())).await.is_ok() {
-                        log::debug!(
-                            "Sent command to get bangId with id {} {:?}",
-                            command_id,
-                            get_bang_id
-                        );
+                    if socket.send(Message::Text(get_bang_id_window.to_string().into())).await.is_ok() {
+                        log::debug!("Sent command to get window.bangId with id {}", command_id);
 
                         // Wait for a response
                         let timeout_duration = Duration::from_secs(5);
                         let timeout_future = tokio::time::sleep(timeout_duration);
                         tokio::pin!(timeout_future);
 
-                        'outer: loop {
+                        'inner: loop {
                             tokio::select! {
                                 _ = &mut timeout_future => {
-                                    log::debug!("Timeout while waiting for bangId response.");
-                                    break 'outer;
+                                    log::debug!("Timeout while waiting for window.bangId response.");
+                                    break 'inner;
                                 }
                                 Some(Ok(msg)) = socket.next() => {
                                     if let Message::Text(txt) = msg {
                                         log::debug!("Received message: {}", txt);
                                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&txt) {
                                             if json["id"] == command_id {
-                                                if let Some(bang_id) =
-                                                    json["result"]["result"]["value"].as_str()
-                                                {
+                                                if let Some(bang_id) = json["result"]["result"]["value"].as_str() {
                                                     if bang_id == search_id {
-                                                        log::debug!(
-                                                            "Found tab with bangId {}: {}",
-                                                            search_id,
-                                                            tab_url
-                                                        );
+                                                        log::debug!("Found tab with bangId {}: {}", search_id, tab_url);
                                                         return Some((target_id, title, page_url));
                                                     }
                                                 }
-                                                break; // Exit loop after processing the response
+                                                break 'inner; // Exit loop after processing the response
                                             }
                                         }
                                     }
                                 }
                                 else => {
                                     log::debug!("WebSocket stream ended unexpectedly.");
-                                    break;
+                                    break 'inner;
                                 }
                             }
                         }
                     }
+                    let command_id = get_unique_id();
+                    // If window.bangId is not set, try sessionStorage.getItem('bangId')
+                    let get_bang_id_session = serde_json::json!({
+                        "id": command_id,
+                        "method": "Runtime.evaluate",
+                        "params": {
+                            "expression": "sessionStorage.getItem('bangId')",
+                            "returnByValue": true
+                        }
+                    });
+
+                    if socket.send(Message::Text(get_bang_id_session.to_string().into())).await.is_ok() {
+                        log::debug!("Sent command to get sessionStorage.bangId with id {}", command_id);
+
+                        // Wait for a response
+                        let timeout_duration = Duration::from_secs(5);
+                        let timeout_future = tokio::time::sleep(timeout_duration);
+                        tokio::pin!(timeout_future);
+
+                        'inner_session: loop {
+                            tokio::select! {
+                                _ = &mut timeout_future => {
+                                    log::debug!("Timeout while waiting for sessionStorage.bangId response.");
+                                    break 'inner_session;
+                                }
+                                Some(Ok(msg)) = socket.next() => {
+                                    if let Message::Text(txt) = msg {
+                                        log::debug!("Received message: {}", txt);
+                                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&txt) {
+                                            if json["id"] == command_id {
+                                                if let Some(bang_id) = json["result"]["result"]["value"].as_str() {
+                                                    if bang_id == search_id {
+                                                        log::debug!("Found tab with bangId {}: {}", search_id, tab_url);
+                                                        return Some((target_id, title, page_url));
+                                                    }
+                                                }
+                                                break 'inner_session; // Exit loop after processing the response
+                                            }
+                                        }
+                                    }
+                                }
+                                else => {
+                                    log::debug!("WebSocket stream ended unexpectedly.");
+                                    break 'inner_session;
+                                }
+                            }
+                        }
+                    }
+                    // let get_bang_id = if !uses_session {
+                    //     serde_json::json!({
+                    //         "id": command_id,
+                    //         "method": "Runtime.evaluate",
+                    //         "params": {
+                    //             "expression": "window.bangId",
+                    //             "returnByValue": true
+                    //         }
+                    //     })
+                    // } else {
+                    //     serde_json::json!({
+                    //         "id": command_id,
+                    //         "method": "Runtime.evaluate",
+                    //         "params": {
+                    //             "expression": "sessionStorage.getItem('bangId')",
+                    //             "returnByValue": true
+                    //         }
+                    //     })
+                    // };
+
+                    // if socket.send(Message::Text(get_bang_id.to_string().into())).await.is_ok() {
+                    //     log::debug!(
+                    //         "Sent command to get bangId with id {} {:?}",
+                    //         command_id,
+                    //         get_bang_id
+                    //     );
+
+                    //     // Wait for a response
+                    //     let timeout_duration = Duration::from_secs(5);
+                    //     let timeout_future = tokio::time::sleep(timeout_duration);
+                    //     tokio::pin!(timeout_future);
+
+                    //     'outer: loop {
+                    //         tokio::select! {
+                    //             _ = &mut timeout_future => {
+                    //                 log::debug!("Timeout while waiting for bangId response.");
+                    //                 break 'outer;
+                    //             }
+                    //             Some(Ok(msg)) = socket.next() => {
+                    //                 if let Message::Text(txt) = msg {
+                    //                     log::debug!("Received message: {}", txt);
+                    //                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&txt) {
+                    //                         if json["id"] == command_id {
+                    //                             if let Some(bang_id) =
+                    //                                 json["result"]["result"]["value"].as_str()
+                    //                             {
+                    //                                 if bang_id == search_id {
+                    //                                     log::debug!(
+                    //                                         "Found tab with bangId {}: {}",
+                    //                                         search_id,
+                    //                                         tab_url
+                    //                                     );
+                    //                                     return Some((target_id, title, page_url));
+                    //                                 }
+                    //                             }
+                    //                             break; // Exit loop after processing the response
+                    //                         }
+                    //                     }
+                    //                 }
+                    //             }
+                    //             else => {
+                    //                 log::debug!("WebSocket stream ended unexpectedly.");
+                    //                 break;
+                    //             }
+                    //         }
+                    //     }
+                    // }
                 }
                 None
             });
@@ -1313,28 +1422,44 @@ async fn set_bang_id_session(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let socket_url = format!("ws://localhost:9222/devtools/page/{}", target_id);
     let (mut socket, _) = connect_async(&socket_url).await?;
-
-    // Set the bangId in sessionStorage
-    let set_bang_id = serde_json::json!({
-        "id": 3,
+    // Set the hash for the page to the bangId
+    let set_hash = serde_json::json!({
+        "id": get_unique_id(),
         "method": "Runtime.evaluate",
         "params": {
-            "expression": format!("sessionStorage.setItem('bangId', '{}');", bang_id),
+            "expression": format!("window.location.hash = '{}';", bang_id),
         }
     });
+    log::debug!("set_hash: {:?}", set_hash);
+    socket
+        .send(Message::Text(set_hash.to_string().into()))
+        .await?;
+    log::debug!("Set window.location.hash to {}", bang_id);
+    // Set the bangId in sessionStorage
+    let set_bang_id = serde_json::json!({
+        "id": get_unique_id(),
+        "method": "Runtime.evaluate",
+        "params": {
+            // "expression": format!("sessionStorage.setItem('bangId', '{}');", bang_id),
+            "expression": format!("window.bangId='{}';", bang_id),
+        }
+    });
+    log::debug!("set_bang_id: {:?}", set_bang_id);
     socket
         .send(Message::Text(set_bang_id.to_string().into()))
         .await?;
-    log::debug!("Set sessionStorage.bangId to {}", bang_id);
+    log::debug!("Set window.bangId to {}", bang_id);
 
     // Verify that the bangId was set
     let verify_bang_id = serde_json::json!({
         "id": 4,
         "method": "Runtime.evaluate",
         "params": {
-            "expression": "sessionStorage.getItem('bangId')",
+            // "expression": "sessionStorage.getItem('bangId')",
+            "expression": "window.bangId",
         }
     });
+    log::debug!("verify_bang_id: {:?}", verify_bang_id);
     socket
         .send(Message::Text(verify_bang_id.to_string().into()))
         .await?;

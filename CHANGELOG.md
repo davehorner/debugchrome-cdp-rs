@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7](https://github.com/davehorner/debugchrome-cdp-rs/compare/v0.1.6...v0.1.7) - 2025-05-05
+
+### Added
+
+- bangId is now primarily found and set in the hash #.  initial load
+
 ## [0.1.6](https://github.com/davehorner/debugchrome-cdp-rs/compare/v0.1.5...v0.1.6) - 2025-05-04
 
 ### Added

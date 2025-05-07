@@ -12,7 +12,7 @@ categories = [
 ]
 readme = "README.md"
 name = "debugchrome-cdp-rs"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 
 [features]
@@ -42,7 +42,7 @@ dashmap = { version = "6.1.0", optional = true }
 dirs = "6.0.0"
 eframe = { version = "0.31.1", optional = true, features = ["serde", "persistence"] }
 egui = { version = "0.31.1", optional = true }
-egui-snarl = { path = "../rust/egui-snarl", optional = true, features = ["egui-probe", "serde"] } #version = "0.7.1",
+egui-snarl = { version = "0.7.1", optional = true, features = ["egui-probe", "serde"] }
 egui_extras = { version = "0.31.1", optional = true, features = ["all_loaders"] }
 fs2 = "0.4.3"
 futures = "0.3.31"
@@ -62,8 +62,11 @@ tokio-tungstenite = "0.26.2"
 tungstenite = "0.26.2"
 url = "2.5.4"
 which = "7.0.3"
+
+[target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.9", features = ["winuser","shellscalingapi"] }
 winreg = "0.55.0"
 
 [build-dependencies]
+chrono = "0.4.41"
 git2 = "0.20.2"

@@ -14,6 +14,15 @@ Sometimes default handlers aren't set, other times the api may return incorrect 
 
 The protocol works if you specify `debugchrome:` or `debugchrome://` before your url and add the !bang variables at the end of your query to control operation.
 
+- As of 0.1.8, `debugchrome` includes an egui console to manage and view debug instances of chrome and associated tabs.  Open an empty `debugchrome:/` url and the gui will launch.
+  When you are running the gui, you are also running a salvo webserver; if this webserver is available - `debugchrome.exe` will utilize the webserver instead of interrogating chrome itself.
+  The gui is not yet used to perform searches and other functions...it will in future releases.
+
+  If you don't enjoy LLM jokes; turn it off via the `uses_funny` feature flag. `cargo run --no-default-features --features "uses_gui"`
+  If you compile without the gui and without the funny; you'll find just the protocol handler.  The webserver is tied directly to the gui for now.
+
+- 0.1.7 introduced initial_payload redirection and tracking via #hash in the url.  This is preferable to session and document variables in some cases - specifically pages that don't support javascript.
+
 ---
 
 ## Features

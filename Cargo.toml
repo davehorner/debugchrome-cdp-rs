@@ -12,25 +12,58 @@ categories = [
 ]
 readme = "README.md"
 name = "debugchrome-cdp-rs"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2024"
+
+[features]
+default = ["uses_gui","uses_funny"]
+egui = ["dep:egui"]
+eframe = ["dep:eframe"]
+uses_funny = []
+uses_gui = ["egui", "eframe","salvo","egui_extras","syn","serde_json","serde","egui-snarl","once_cell","dashmap"]
+salvo = ["dep:salvo"]
+egui-snarl = ["dep:egui-snarl"]
+egui_extras = ["dep:egui_extras"]
+syn = ["dep:syn"]
+serde = ["dep:serde"]
+serde_json = ["dep:serde_json"]
+dashmap = ["dep:dashmap"]
+once_cell = ["dep:once_cell"]
+
 [[bin]]
 name = "debugchrome"
 path = "src/main.rs"
 
 [dependencies]
+active-win-pos-rs = "0.9.0"
 base64 = "0.22.1"
 chrono = "0.4.41"
+dashmap = { version = "6.1.0", optional = true }
 dirs = "6.0.0"
+eframe = { version = "0.31.1", optional = true, features = ["serde", "persistence"] }
+egui = { version = "0.31.1", optional = true }
+egui-snarl = { path = "../rust/egui-snarl", optional = true, features = ["egui-probe", "serde"] } #version = "0.7.1",
+egui_extras = { version = "0.31.1", optional = true, features = ["all_loaders"] }
+fs2 = "0.4.3"
 futures = "0.3.31"
 futures-util = "0.3.31"
 log = "0.4.27"
-rayon = "1.10.0"
+once_cell = { version = "1.21.3", optional = true }
+rand = "0.9.1"
 reqwest = { version = "0.12.15", features = ["blocking", "json"] }
-serde_json = "1.0.140"
+salvo = { version = "0.78.0", optional = true, features = ["affix-state"] }
+serde = { version = "1.0.219", features = ["derive"], optional = true }
+serde_json = { version = "1.0.140", optional = true }
 simplelog = "0.12.2"
+syn = { version = "2.0.101", optional = true, features = ["extra-traits"] }
+sysinfo = "0.35.0"
 tokio = { version = "1.44.2", features = ["macros", "rt-multi-thread"] }
 tokio-tungstenite = "0.26.2"
 tungstenite = "0.26.2"
 url = "2.5.4"
+which = "7.0.3"
 winapi = { version = "0.3.9", features = ["winuser","shellscalingapi"] }
+winreg = "0.55.0"
+
+[build-dependencies]
+git2 = "0.20.2"

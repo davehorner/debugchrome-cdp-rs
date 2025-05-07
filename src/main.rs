@@ -1,5 +1,4 @@
 use base64::Engine;
-use rayon::prelude::*;
 use serde_json::Value;
 use std::fs::File;
 use std::io::Write;
@@ -20,6 +19,11 @@ struct MonitorInfo {
     rect: RECT,
     dpi_scaling: f32,
 }
+
+#[cfg(feature = "uses_gui")]
+mod gui;
+#[cfg(feature = "uses_funny")]
+mod jokes;
 
 #[cfg(target_os = "windows")]
 impl std::fmt::Debug for MonitorInfo {
@@ -155,11 +159,37 @@ async fn main() -> std::io::Result<()> {
         File::create(log_file_path)?
     };
     WriteLogger::init(LevelFilter::Debug, Config::default(), log_file).unwrap();
+    log::debug!("DebugChrome started with args: {:?}", args);
+    setup_panic_hook(); // must be done after logger initialization
 
     if args.len() > 1 {
         let raw_url = &args[1];
+        if raw_url == "debugchrome:"
+            || raw_url == "debugchrome:/"
+            || raw_url == "debugchrome://"
+            || raw_url == "debugchrome:///"
+        {
+            #[cfg(feature = "uses_gui")]
+            {
+                println!("Starting GUI...");
+                if let Err(e) = gui::start_gui().await {
+                    eprintln!("GUI error: {}", e);
+                    log::error!("GUI error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+
+            #[cfg(not(feature = "uses_gui"))]
+            {
+                eprintln!("GUI support is not enabled. Rebuild with the `uses_gui` feature.");
+                log::error!("GUI support is not enabled. Rebuild with the `uses_gui` feature.");
+                std::process::exit(1);
+            }
+            std::process::exit(0);
+        }
+
         log::debug!("Received URL: {}", raw_url);
-        println!("Received URL: {}", raw_url);
+        println!("Received URL: {:?}", raw_url);
     }
     let log_file_path = std::fs::canonicalize(log_file_path)?.display().to_string();
     println!("Log file: {}", log_file_path);
@@ -476,15 +506,17 @@ async fn main() -> std::io::Result<()> {
     } else {
         println!("Usage:");
         println!(
-            "  debugchrome.exe \"debugchrome:https://www.rust-lang.org?x=0&y=0&w=800&h=600&!id=123\""
+            "  debugchrome.exe \"debugchrome:https://www.rust-lang.org?!x=0&!y=0&!w=800&!h=600&!id=123\""
         );
         println!("  debugchrome.exe --search 123");
         println!("  debugchrome.exe --register");
     }
     #[cfg(target_os = "windows")]
     finalize_actions(previous_window, keep_focus);
+
     Ok(())
 }
+
 async fn open_window_via_devtools(
     clean_url: &str,
     bangs: &std::collections::HashMap<String, String>,
@@ -530,16 +562,19 @@ async fn open_window_via_devtools(
             (0, 0, 0, 0, false) // Indicate that bounds should not be included
         };
 
-        use base64::engine::general_purpose::STANDARD as base64_engine;
+    use base64::engine::general_purpose::STANDARD as base64_engine;
 
-        let bang_id = bangs.get("id").cloned().unwrap_or_default();
-        let html_content = include_str!("../static/initial_payload.html")
-            .replace("{{BANG_ID}}", &bang_id)
-            .replace("{{CLEAN_URL}}", clean_url)
-            .replace("{{DELAY_IN_SECONDS}}", "2");
-        let encoded_html = base64_engine.encode(html_content);
-        let placeholder_url = format!("data:text/html;base64,{}#{}", encoded_html, bang_id);
-        println!("{:?} Bounds: left={}, top={}, width={}, height={}, include_bounds={}",monitor_index, left, top, width, height, include_bounds);
+    let bang_id = bangs.get("id").cloned().unwrap_or_default();
+    let html_content = include_str!("../static/initial_payload.html")
+        .replace("{{BANG_ID}}", &bang_id)
+        .replace("{{CLEAN_URL}}", clean_url)
+        .replace("{{DELAY_IN_SECONDS}}", "2");
+    let encoded_html = base64_engine.encode(html_content);
+    let placeholder_url = format!("data:text/html;base64,{}#{}", encoded_html, bang_id);
+    println!(
+        "{:?} Bounds: left={}, top={}, width={}, height={}, include_bounds={}",
+        monitor_index, left, top, width, height, include_bounds
+    );
     let unique = get_unique_id();
     if let Some(context_id) = browser_context_id {
         if include_bounds {
@@ -600,7 +635,9 @@ async fn open_window_via_devtools(
         {
             let json: serde_json::Value = serde_json::from_str(&txt)?;
             if let Some(target_id) = json["result"]["targetId"].as_str() {
-                let _ = set_bang_id_session(&target_id, &bangs.get("id").cloned().unwrap_or_default()).await;
+                let _ =
+                    set_bang_id_session(&target_id, &bangs.get("id").cloned().unwrap_or_default())
+                        .await;
                 return Ok(target_id.to_owned());
             }
         }
@@ -1669,4 +1706,152 @@ fn adjust_for_dpi(x: i32, y: i32, w: i32, h: i32, dpi_scaling: f32) -> (i32, i32
         (w as f32 / dpi_scaling).round() as i32,
         (h as f32 / dpi_scaling).round() as i32,
     )
+}
+
+use std::fs::OpenOptions;
+use std::panic;
+
+fn setup_panic_hook() {
+    panic::set_hook(Box::new(|info| {
+        let panic_message = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Unknown panic message".to_string()
+        };
+
+        let location = if let Some(location) = info.location() {
+            format!(
+                "Panic occurred in file '{}:{}'",
+                std::fs::canonicalize(location.file())
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|_| location.file().to_string()),
+                location.line()
+            )
+        } else {
+            "Unknown location".to_string()
+        };
+        log::error!("PANIC: {}\n{}", panic_message, location);
+
+        let log_file_path = if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                exe_dir
+                    .join("debugchrome.log")
+                    .to_string_lossy()
+                    .to_string()
+            } else {
+                "debugchrome.log".to_string()
+            }
+        } else {
+            "debugchrome.log".to_string()
+        };
+
+        // Optionally, display a message box or keep the window open
+        #[cfg(target_os = "windows")]
+        unsafe {
+            use std::ffi::CString;
+            use winapi::um::winuser::{MB_ICONERROR, MB_OK, MessageBoxA};
+
+            let message = CString::new(format!(
+                "The application encountered an error and needs to close. Check the log for details.\n\nPanic Message: {}\n{}",
+                panic_message, &log_file_path.clone()
+            ))
+            .unwrap();
+            let title = CString::new("Application Error").unwrap();
+            MessageBoxA(
+                std::ptr::null_mut(),
+                message.as_ptr(),
+                title.as_ptr(),
+                MB_OK | MB_ICONERROR,
+            );
+        }
+    }));
+}
+
+use sysinfo::{Process, System};
+use winapi::um::handleapi::CloseHandle;
+use winapi::um::processthreadsapi::OpenProcess;
+use winapi::um::winnt::PROCESS_QUERY_INFORMATION;
+use winapi::um::winuser::{GetWindowThreadProcessId, IsWindowVisible};
+
+fn find_chrome_with_debug_port() -> Option<u32> {
+    // Structure to hold the matching process ID
+    struct EnumData {
+        pid: u32,
+        hwnd: Option<winapi::shared::windef::HWND>,
+    }
+
+    unsafe extern "system" fn enum_windows_proc(
+        hwnd: winapi::shared::windef::HWND,
+        lparam: winapi::shared::minwindef::LPARAM,
+    ) -> i32 {
+        let data = &mut *(lparam as *mut EnumData);
+
+        // Check if the window is visible
+        if IsWindowVisible(hwnd) == 0 {
+            return 1; // Continue enumeration
+        }
+
+        // Get the process ID for the window
+        let mut process_id = 0;
+        GetWindowThreadProcessId(hwnd, &mut process_id);
+
+        // Check if the process ID matches
+        if process_id == data.pid {
+            data.hwnd = Some(hwnd);
+            return 0; // Stop enumeration
+        }
+
+        1 // Continue enumeration
+    }
+
+    // Create a system object to get process information
+    let mut system = System::new_all();
+    system.refresh_all();
+
+    // Iterate over all processes
+    for (pid, process) in system.processes() {
+        // Check if the process name contains "chrome.exe"
+        if process
+            .name()
+            .to_string_lossy()
+            .to_ascii_lowercase()
+            .contains("chrome.exe")
+        {
+            // Check if the command line contains "--remote-debugging-port"
+            if let Some(cmd) = process
+                .cmd()
+                .join(std::ffi::OsStr::new(" "))
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                .find("--remote-debugging-port")
+            {
+                println!(
+                    "Found Chrome process with PID: {} and command line: {:?}",
+                    pid,
+                    process.cmd().join(std::ffi::OsStr::new(" "))
+                );
+
+                // Check if the process has a main window
+                let mut data = EnumData {
+                    pid: pid.as_u32(),
+                    hwnd: None,
+                };
+                unsafe {
+                    EnumWindows(
+                        Some(enum_windows_proc),
+                        &mut data as *mut _ as winapi::shared::minwindef::LPARAM,
+                    );
+                }
+
+                if let Some(hwnd) = data.hwnd {
+                    println!("Found Chrome window with HWND: {:?}", hwnd);
+                    return Some(pid.as_u32());
+                }
+            }
+        }
+    }
+
+    None
 }

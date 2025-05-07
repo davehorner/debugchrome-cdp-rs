@@ -1770,11 +1770,16 @@ fn setup_panic_hook() {
 }
 
 use sysinfo::{Process, System};
+#[cfg(target_os = "windows")]
 use winapi::um::handleapi::CloseHandle;
+#[cfg(target_os = "windows")]
 use winapi::um::processthreadsapi::OpenProcess;
+#[cfg(target_os = "windows")]
 use winapi::um::winnt::PROCESS_QUERY_INFORMATION;
+#[cfg(target_os = "windows")]
 use winapi::um::winuser::{GetWindowThreadProcessId, IsWindowVisible};
 
+#[cfg(target_os = "windows")]
 fn find_chrome_with_debug_port() -> Option<u32> {
     // Structure to hold the matching process ID
     struct EnumData {

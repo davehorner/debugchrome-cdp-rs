@@ -12,7 +12,7 @@ categories = [
 ]
 readme = "README.md"
 name = "debugchrome-cdp-rs"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 
 [features]

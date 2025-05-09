@@ -5,13 +5,15 @@ use std::env;
 pub struct CefBrowser {
     object: *mut RcImpl<cef_dll_sys::_cef_app_t, Self>,
     window: Arc<Mutex<Option<Window>>>,
+    shared_url: Arc<Mutex<Option<String>>>, // Shared state for the URL
 }
 
 impl CefBrowser {
-    pub fn new(window: Arc<Mutex<Option<Window>>>) -> App {
+    pub fn new(window: Arc<Mutex<Option<Window>>>, shared_url: Arc<Mutex<Option<String>>>) -> App {
         App::new(Self {
             object: std::ptr::null_mut(),
             window,
+            shared_url,
         })
     }
 
@@ -104,8 +106,9 @@ impl Clone for CefBrowser {
             }
         };
         let window = self.window.clone();
+        let shared_url = self.shared_url.clone();
 
-        Self { object, window }
+        Self { object, window, shared_url }
     }
 }
 
@@ -127,20 +130,25 @@ impl ImplApp for CefBrowser {
     }
 
     fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
-        Some(DemoBrowserProcessHandler::new(self.window.clone()))
+        Some(DemoBrowserProcessHandler::new(self.window.clone(), self.shared_url.clone()))
     }
 }
 
 struct DemoBrowserProcessHandler {
     object: *mut RcImpl<cef_dll_sys::cef_browser_process_handler_t, Self>,
     window: Arc<Mutex<Option<Window>>>,
+    shared_url: Arc<Mutex<Option<String>>>, // Shared state for the URL
 }
 
 impl DemoBrowserProcessHandler {
-    fn new(window: Arc<Mutex<Option<Window>>>) -> BrowserProcessHandler {
+    fn new(
+        window: Arc<Mutex<Option<Window>>>,
+        shared_url: Arc<Mutex<Option<String>>>,
+    ) -> BrowserProcessHandler {
         BrowserProcessHandler::new(Self {
             object: std::ptr::null_mut(),
             window,
+            shared_url,
         })
     }
 }
@@ -169,8 +177,9 @@ impl Clone for DemoBrowserProcessHandler {
         };
 
         let window = self.window.clone();
+        let shared_url = self.shared_url.clone();
 
-        Self { object, window }
+        Self { object, window, shared_url }
     }
 }
 
@@ -181,9 +190,18 @@ impl ImplBrowserProcessHandler for DemoBrowserProcessHandler {
 
     // The real lifespan of cef starts from `on_context_initialized`, so all the cef objects should be manipulated after that.
     fn on_context_initialized(&self) {
-        println!("cef context intiialized");
+        println!("CEF context initialized");
+
+        // Access the shared URL
+        let url = {
+            let shared_url = self.shared_url.lock().unwrap();
+            shared_url.clone().unwrap_or_else(|| "https://www.google.com".to_string())
+        };
+
+        println!("Launching browser with URL: {}", url);
+
         let mut client = DemoClient::new();
-        let url = CefString::from("https://www.google.com");
+        let url = CefString::from(url.as_str());
 
         let browser_view = browser_view_create(
             Some(&mut client),

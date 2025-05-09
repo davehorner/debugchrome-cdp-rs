@@ -114,7 +114,7 @@ def divide_monitor_into_grid(monitor, rows, cols, working_area=None):
 def main():
     # Get all connected monitors
     monitors = get_monitors()
-    rows, cols = 4, 6 # Define the grid size (e.g., 4x4)
+    rows, cols = 4, 4 # Define the grid size (e.g., 4x4)
     max_concurrent_processes = rows*cols * len(monitors)# Control the number of subprocesses running at one time
     # Shuffle the grid cells across all monitors for random order
     all_grid_cells = []
@@ -129,7 +129,11 @@ def main():
         with ThreadPoolExecutor(max_workers=max_concurrent_processes) as executor:
             futures = []
             for monitor_index, x, y, w, h in all_grid_cells:
-                url = f"debugchrome:https://crates.io/crates/debugchrome-cdp-rs?!x={x}&!y={y}&!w={w}&!h={h}&!monitor={monitor_index}&!openwindow&!timeout=30"
+                labelText = f"Grid({x},{y},{w},{h}), Monitor {monitor_index}"
+                hexColor = f"{random.randint(0, 255):02x}{random.randint(0, 255):02x}{random.randint(0, 255):02x}"
+                h_adjst = h-98  # Adjust height to account for chrome
+                l = f"https://placehold.co/{w}x{h_adjst}/{hexColor}/FFF?text={labelText}"
+                url = f"debugchrome:{l}!x={x}&!y={y}&!w={w}&!h={h}&!monitor={monitor_index}&!openwindow&!timeout=30"
                 print(f"Queueing window at x={x}, y={y}, w={w}, h={h}, monitor={monitor_index}")
                 futures.append(executor.submit(subprocess.run, ["debugchrome.exe", url]))
 

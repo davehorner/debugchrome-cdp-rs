@@ -241,8 +241,10 @@ async fn main() {
     let switch = CefString::from("type");
     let is_browser_process = cmd.has_switch(Some(&switch)) != 1;
 
+    let shared_url = Arc::new(std::sync::Mutex::new(Some("https://openai.com".to_string()))); // Shared state for the URL
+
     let window = Arc::new(std::sync::Mutex::new(None));
-    let mut app = cef_browser::CefBrowser::new(window.clone());
+    let mut app = CefBrowser::new(window.clone(), shared_url.clone());
     let ret = execute_process(
         Some(args.as_main_args()),
         Some(&mut app),

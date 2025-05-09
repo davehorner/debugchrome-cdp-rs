@@ -1,6 +1,10 @@
 use cef::{args::Args, rc::*, sandbox_info::SandboxInfo, *};
 use cef_dll_sys::cef_event_flags_t as KeyModifiers; // Import KeyModifiers
 use tokio::sync::mpsc::{self, Sender, Receiver}; // Import Sender and Receiver
+use tokio::{task, time::{sleep, Duration}};
+use tokio_tungstenite::connect_async;
+use futures_util::{SinkExt, StreamExt};
+use serde_json::json;
 
 const EVENTFLAG_CONTROL_DOWN: u32 = 1 << 2; // Define the constant manually based on CEF documentation
 use std::sync::{Arc, Mutex};
@@ -73,26 +77,21 @@ impl CefBrowser {
 
     fn create_browser_window(&self, url: &str) {
         let mut client = DemoClient::new();
-        let url = CefString::from(url);
-
-        let browser_view = browser_view_create(
+        let mut window_info = WindowInfo::default();
+        let settings = BrowserSettings::default();
+        let browser = browser_host_create_browser(
+            Some(&mut window_info),
             Some(&mut client),
-            Some(&url),
-            Some(&Default::default()),
-            Option::<&mut DictionaryValue>::None,
-            Option::<&mut RequestContext>::None,
-            Option::<&mut BrowserViewDelegate>::None,
-        )
-        .expect("Failed to create browser view");
-
-        // browser_view.get_browser().map(|browser| {
-        // //     println!("Browser ID: {}, URL: {}", browser.get_identifier(), 
-        // //         browser.get_main_frame().map_or("None".to_string(), |f| f.get_url().to_string().to_string()));
-        // // });
+            Some(&CefString::from(url)),
+            Some(&settings),
+            None::<&mut DictionaryValue>,      // extra_info
+            None::<&mut RequestContext>,       // request_context
+        );
+        // repeat once per window; each will appear under http://127.0.0.1:9222/json
 
         let (tab_switch_tx, tab_switch_rx) = mpsc::channel(10); // Create a channel for tab-switching events
         let tab_switch_rx = Arc::new(Mutex::new(tab_switch_rx)); // Wrap receiver in Arc<Mutex<>>
-        let mut delegate = DemoWindowDelegate::new(vec![browser_view], tab_switch_rx);
+        let mut delegate = DemoWindowDelegate::new(tab_switch_rx);
         if let Ok(mut window) = self.window.lock() {
             *window = Some(
                 window_create_top_level(Some(&mut delegate)).expect("Failed to create window"),
@@ -221,6 +220,18 @@ impl ImplBrowserProcessHandler for DemoBrowserProcessHandler {
 
         // Create the second window with three tabs
         self.create_window_with_tabs(window2_urls);
+
+        // In your on_context_initialized, after creating windows/tabs:
+        let debug_port = 9222;
+        let all_urls = vec![
+            vec!["https://google.com", "https://github.com"]
+                .into_iter().map(String::from).collect(),
+            vec!["https://rust-lang.org", "https://crates.io"]
+                .into_iter().map(String::from).collect(),
+        ];
+
+        // spawn one driver task per BrowserView
+        spawn_cdp_drivers(debug_port, all_urls, Duration::from_secs(10));
     }
 }
 
@@ -230,57 +241,60 @@ impl DemoBrowserProcessHandler {
         let mut client = DemoClient::new();
         let first_url = CefString::from(urls[0]);
 
-        let browser_view = browser_view_create(
+        // prepare window info and BrowserSettings for the call
+        let mut window_info = WindowInfo::default();
+        let browser_settings = BrowserSettings::default();
+        let _ = browser_host_create_browser_sync(
+            Some(&mut window_info),
             Some(&mut client),
             Some(&first_url),
-            Some(&Default::default()),
-            Option::<&mut DictionaryValue>::None,
-            Option::<&mut RequestContext>::None,
-            Option::<&mut BrowserViewDelegate>::None,
+            Some(&browser_settings),
+            None::<&mut DictionaryValue>,
+            None::<&mut RequestContext>,
         )
         .expect("Failed to create browser view");
 
         // Convert string references to owned Strings
-        let owned_urls: Vec<String> = urls.iter().map(|&s| s.to_owned()).collect();
+        // let owned_urls: Vec<String> = urls.iter().map(|&s| s.to_owned()).collect();
 
-        // Create communication channels
-        let (command_tx, command_rx) = mpsc::channel::<WindowCommand>(32);
-        let window_proxy = WindowProxy::new(command_tx);
+        // // Create communication channels
+        // let (command_tx, command_rx) = mpsc::channel::<WindowCommand>(32);
+        // let window_proxy = WindowProxy::new(command_tx);
 
-        // Create the window with the single browser view
-        let mut delegate = DemoWindowDelegate::new(vec![browser_view.clone()], Arc::new(Mutex::new(mpsc::channel(10).1)));
+        // // Create the window with the single browser view
+        // let mut delegate = DemoWindowDelegate::new(Arc::new(Mutex::new(mpsc::channel(10).1)));
         
-        if let Ok(mut window_opt) = self.window.lock() {
-            *window_opt = Some(
-                window_create_top_level(Some(&mut delegate)).expect("Failed to create window")
-            );
+        // if let Ok(mut window_opt) = self.window.lock() {
+        //     // *window_opt = Some(
+        //     //     window_create_top_level(Some(&mut delegate)).expect("Failed to create window")
+        //     // );
             
-            if let Some(window) = window_opt.as_mut() {
-                window.show();
+        //     if let Some(window) = window_opt.as_mut() {
+        //         // window.show();
                 
-                // Clone the browser view and window for the manager
-                let browser_view_clone = browser_view.clone();
-                let window_clone = window.clone();
+        //         // Clone the browser view and window for the manager
+        //         // let browser_view_clone = browser_view.clone();
+        //         // let window_clone = window.clone();
                 
-                // Start the view manager in a separate task
-                tokio::spawn(async move {
-                    let mut manager = SingleViewManager::new(
-                        window_clone,
-                        browser_view_clone, 
-                        owned_urls,
-                        command_rx
-                    );
-                    manager.run().await;
-                });
+        //         // // Start the view manager in a separate task
+        //         // tokio::spawn(async move {
+        //         //     let mut manager = SingleViewManager::new(
+        //         //         window_clone,
+        //         //         browser_view_clone, 
+        //         //         owned_urls,
+        //         //         command_rx
+        //         //     );
+        //         //     manager.run().await;
+        //         // });
                 
-                // Start a timer for automatic tab switching
-                let window_proxy_clone = window_proxy.clone();
-                let tab_count = urls.len();
-                tokio::spawn(async move {
-                    Self::start_tab_switch_timer(window_proxy_clone, tab_count).await;
-                });
-            }
-        }
+        //         // // Start a timer for automatic tab switching
+        //         // let window_proxy_clone = window_proxy.clone();
+        //         // let tab_count = urls.len();
+        //         // tokio::spawn(async move {
+        //         //     Self::start_tab_switch_timer(window_proxy_clone, tab_count).await;
+        //         // });
+        //     }
+        // }
     }
 
     // Timer that uses the proxy for tab switching
@@ -434,17 +448,15 @@ impl ImplClient for DemoClient {
 
 pub struct DemoWindowDelegate {
     base: *mut RcImpl<cef_dll_sys::_cef_window_delegate_t, Self>,
-    browser_views: Vec<BrowserView>, // Store all browser views (tabs)
     active_tab_index: usize,         // Track the currently active tab
     tab_switch_rx: Arc<Mutex<mpsc::Receiver<usize>>>, // Wrap receiver in Arc<Mutex<>>
     window: Option<Window>,          // Add a field to store the window instance
 }
 
 impl DemoWindowDelegate {
-    fn new(browser_views: Vec<BrowserView>, tab_switch_rx: Arc<Mutex<mpsc::Receiver<usize>>>) -> WindowDelegate {
+    fn new( tab_switch_rx: Arc<Mutex<mpsc::Receiver<usize>>>) -> WindowDelegate {
             WindowDelegate::new(Self {
                 base: std::ptr::null_mut(),
-                browser_views,
                 active_tab_index: 0, // Start with the first tab as active
                 tab_switch_rx,
                 window: None, // Initialize the window field as None
@@ -452,21 +464,21 @@ impl DemoWindowDelegate {
         }
 
     fn switch_tab(&mut self, tab_index: usize) {
-        if tab_index < self.browser_views.len() {
-            // Hide all tabs
-            for (i, browser_view) in self.browser_views.iter_mut().enumerate() {
-                browser_view.set_visible(if i == tab_index { 1 } else { 0 });
-                println!("Tab {} visibility set to {}", i, i == tab_index);
-            }
+        // if tab_index < self.browser_views.len() {
+        //     // Hide all tabs
+        //     for (i, browser_view) in self.browser_views.iter_mut().enumerate() {
+        //         browser_view.set_visible(if i == tab_index { 1 } else { 0 });
+        //         println!("Tab {} visibility set to {}", i, i == tab_index);
+        //     }
             
-            self.active_tab_index = tab_index;
-            println!("Switched to tab {}", tab_index);
+        //     self.active_tab_index = tab_index;
+        //     println!("Switched to tab {}", tab_index);
             
-            // Force layout update
-            if let Some(window) = &self.window {
-                window.layout();
-            }
-        }
+        //     // Force layout update
+        //     if let Some(window) = &self.window {
+        //         window.layout();
+        //     }
+        // }
     }
 
     /// Start listening for tab-switching events
@@ -497,7 +509,7 @@ impl Clone for DemoWindowDelegate {
 
         Self {
             base: self.base,
-            browser_views: self.browser_views.clone(),
+            // browser_views: self.browser_views.clone(),
             tab_switch_rx: self.tab_switch_rx.clone(), // Wrap in Arc<Mutex<>> for shared ownership
             active_tab_index: self.active_tab_index,
             window: self.window.clone(), // Clone the window field
@@ -532,13 +544,18 @@ impl ImplViewDelegate for DemoWindowDelegate {
 impl ImplPanelDelegate for DemoWindowDelegate {}
 
 impl ImplWindowDelegate for DemoWindowDelegate {
-    fn on_window_created(&self, window: Option<&mut impl ImplWindow>) {
-        if let Some(window) = window {
-            let mut view = self.browser_views[0].clone();
+fn on_window_created(&self, window: Option<&mut impl ImplWindow>) {
+    if let Some(window) = window {
+        if let Some(mut view) = window.as_browser_view() {
             window.add_child_view(Some(&mut view));
             window.show();
+        } else {
+            println!("Window is None inside in on_window_created");
         }
+    } else {
+        println!("Window is None in on_window_created");
     }
+}
 
     fn on_window_destroyed(&self, _window: Option<&mut impl ImplWindow>) {
         quit_message_loop();
@@ -1005,5 +1022,64 @@ impl ImplLoadHandler for DemoLoadHandler {
         if let Some(url) = failed_url {
             println!("   Failed URL: {}", url.to_string());
         }
+    }
+}
+
+// helper to discover targets
+async fn fetch_targets(port: u16) -> serde_json::Value {
+    let url = format!("http://127.0.0.1:{}/json", port);
+    let resp = reqwest::get(&url).await.unwrap();
+    resp.json().await.unwrap()
+}
+
+// drive one view by its DevTools WS URL
+async fn drive_cdp(ws_url: String, urls: Vec<String>, delay: Duration) {
+    let (mut ws, _) = connect_async(ws_url).await.unwrap();
+    // enable Page domain
+    ws.send(tungstenite::Message::Text(
+        json!({"id":1,"method":"Page.enable"}).to_string().into()
+    )).await.unwrap();
+
+    let mut i = 0;
+    loop {
+      let url = &urls[i];
+      sleep(delay).await;
+      let cmd = json!({
+        "id": 1000 + i,
+        "method": "Page.navigate",
+        "params": { "url": url }
+      });
+      println!("→ navigating to {}", url);
+      ws.send(tungstenite::Message::Text(cmd.to_string().into())).await.unwrap();
+      i = (i + 1) % urls.len();
+    }
+}
+
+fn spawn_cdp_drivers(
+    debug_port: u16,
+    view_urls: Vec<Vec<String>>,
+    per_tab_delay: Duration
+) {
+    for (window_index, urls) in view_urls.into_iter().enumerate() {
+        let port = debug_port;
+        task::spawn(async move {
+            loop {
+                let targets = fetch_targets(port).await;
+                if let Some(arr) = targets.as_array() {
+                    // once CEF has registered *at least* window_index+1 targets…
+                    if arr.len() > window_index {
+                        let entry = &arr[window_index];
+                        let ws_url = entry["webSocketDebuggerUrl"]
+                            .as_str()
+                            .expect("no ws url")
+                            .to_string();
+                        println!("→ window {} uses {}", window_index, ws_url);
+                        drive_cdp(ws_url, urls.clone(), per_tab_delay).await;
+                        break;
+                    }
+                }
+                sleep(Duration::from_secs(1)).await;
+            }
+        });
     }
 }

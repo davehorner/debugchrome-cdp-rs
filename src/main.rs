@@ -1,13 +1,18 @@
 use base64::Engine;
 use serde_json::Value;
+use tokio::sync::Mutex;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use std::{env, fs, io};
 use tungstenite::Message;
+use cef::{args::Args, rc::*, sandbox_info::SandboxInfo};
+use clap::{Parser, Subcommand};
+use cef::ImplCommandLine;
 
 use futures_util::TryFutureExt;
 #[cfg(target_os = "windows")]
@@ -133,388 +138,221 @@ fn split_and_process_url(raw_url: &str) -> (String, std::collections::HashMap<St
     (base_url, bang_params)
 }
 
+#[derive(Parser, Debug)]
+#[command(name = "DebugChrome")]
+#[command(author = "Your Name <your.email@example.com>")]
+#[command(version = "1.0")]
+#[command(about = "Debug Chrome or use an integrated CEF browser", long_about = None)]
+pub struct AppArgs {
+    /// Use the integrated CEF browser
+    #[arg(short, long)]
+    pub cef: bool,
+
+    /// The URL to open
+    #[arg()]
+    pub url: Option<String>,
+
+    /// Subcommands for additional functionality
+    #[command(subcommand)]
+    pub command: Option<Commands>,
+
+    /// Internal argument used by CEF subprocesses
+    #[arg(long)]
+    pub r#type: Option<String>,
+    /// Internal argument used by CEF subprocesses
+    #[arg(long)]
+    pub r#utility_sub_type: Option<String>,
+    /// Internal argument used by CEF subprocesses
+    #[arg(long)]
+    pub r#lang: Option<String>,
+    /// Internal argument used by CEF subprocesses
+    #[arg(long)]
+    pub r#service_sandbox_type: Option<String>,
+    /// internal argument used by cef subprocesses
+    #[arg(long)]
+    pub r#no_pre_read_main_dll: Option<String>,
+    /// internal argument used by cef subprocesses
+    #[arg(long)]
+    pub r#start_stack_profiler: Option<String>,
+}
+
+/// Subcommands for additional functionality
+#[derive(Subcommand, Debug)]
+pub enum Commands {
+    /// Register the debugchrome protocol
+    Register,
+    /// Search for a tab by bang ID
+    Search {
+        /// The bang ID to search for
+        id: String,
+        /// Close the tab if found
+        #[arg(long)]
+        close: bool,
+    },
+    /// Close a target by ID
+    CloseTarget {
+        /// The target ID to close
+        id: String,
+        /// Timeout in seconds before closing
+        #[arg(long, default_value_t = 0)]
+        timeout: u64,
+    },
+}
+
+mod cef_browser;
+use cef_browser::CefBrowser;
+use cef::CefString;
+
+use cef::*;
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
-    let args: Vec<String> = env::args().collect();
-    // Set the current working directory to the directory of the executing binary
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            std::env::set_current_dir(exe_dir)?;
-            log::debug!("Working directory set to: {:?}", exe_dir);
-        }
-    }
-    let log_file_path = "debugchrome.log";
-    let append_log = if let Ok(metadata) = fs::metadata(log_file_path) {
-        metadata.len() <= 5 * 1024 * 1024 // Check if the file size is 5 MB or less
-    } else {
-        true // Default to append if metadata cannot be retrieved
+async fn main() {
+       #[cfg(target_os = "macos")]
+    let _loader = {
+        let loader = library_loader::LibraryLoader::new(&std::env::current_exe().unwrap(), false);
+        assert!(loader.load());
+        loader
     };
 
-    let log_file = if append_log {
-        fs::OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(log_file_path)?
+    let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
+
+    let args = Args::new();
+    let cmd = args.as_cmd_line().unwrap();
+    let c: CefStringUserfreeUtf16=cmd.command_line_string();
+        let p = CefString::from(&c);
+        println!("launch process {p}");
+
+    // // let raw_url = cmd.get_arg(0).unwrap_or_default();
+    // println!("Raw URL: {:?}", c);
+    // let (clean_url, bangs) = split_and_process_url(&raw_url);
+    // println!("Clean URL: {:?}", clean_url);
+    // println!("Bangs: {:?}", bangs);
+    // let keep_focus = bangs.get("keep_focus").map(|v| v.eq_ignore_ascii_case("true")).unwrap_or(false);
+    // let close = bangs.get("close").map(|v| v.eq_ignore_ascii_case("true")).unwrap_or(false);
+    // let screenshot = bangs.get("screenshot").map(|v| v.eq_ignore_ascii_case("true")).unwrap_or(false);
+    // let dpi_scaling_enabled = bangs.get("dpi").map(|v| v.eq_ignore_ascii_case("true")).unwrap_or(false);
+    // let monitor_index = bangs.get("monitor").and_then(|v| v.parse::<usize>().ok());
+    // let x = bangs.get("x").and_then(|v| v.parse::<i32>().ok()).unwrap_or(0);
+    // let y = bangs.get("y").and_then(|v| v.parse::<i32>().ok()).unwrap_or(0);
+    // let w = bangs.get("w").and_then(|v| v.parse::<i32>().ok()).unwrap_or(0);
+    // let h = bangs.get("h").and_then(|v| v.parse::<i32>().ok()).unwrap_or(0);
+
+    let sandbox = SandboxInfo::new();
+
+    let switch = CefString::from("type");
+    let is_browser_process = cmd.has_switch(Some(&switch)) != 1;
+
+    let window = Arc::new(std::sync::Mutex::new(None));
+    let mut app = cef_browser::CefBrowser::new(window.clone());
+    let ret = execute_process(
+        Some(args.as_main_args()),
+        Some(&mut app),
+        sandbox.as_mut_ptr(),
+    );
+
+    if is_browser_process {
+        println!("launch browser process");
+        assert!(ret == -1, "cannot execute browser process");
     } else {
-        File::create(log_file_path)?
-    };
-    WriteLogger::init(LevelFilter::Debug, Config::default(), log_file).unwrap();
-    log::debug!("DebugChrome started with args: {:?}", args);
-    setup_panic_hook(); // must be done after logger initialization
 
-    if args.len() > 1 {
-        let raw_url = &args[1];
-        if raw_url == "debugchrome:"
-            || raw_url == "debugchrome:/"
-            || raw_url == "debugchrome://"
-            || raw_url == "debugchrome:///"
-        {
-            #[cfg(feature = "uses_gui")]
-            {
-                println!("Starting GUI...");
-                if let Err(e) = gui::start_gui().await {
-                    eprintln!("GUI error: {}", e);
-                    log::error!("GUI error: {}", e);
-                    std::process::exit(1);
+        let process_type = CefString::from(&cmd.switch_value(Some(&switch)));
+        println!("launch process {process_type}");
+        assert!(ret >= 0, "cannot execute non-browser process");
+        // non-browser process does not initialize cef
+        return;
+    }
+    let mut settings = Settings::default();
+    settings.remote_debugging_port = 9222;
+    assert_eq!(
+        initialize(
+            Some(args.as_main_args()),
+            Some(&settings),
+            Some(&mut app),
+            sandbox.as_mut_ptr()
+        ),
+        1
+    );
+
+    tokio::spawn(async {
+        let parsed_args = AppArgs::parse();
+        if let Some(command) = parsed_args.command {
+            match command {
+                Commands::Register => {
+                    println!("Registering debugchrome protocol...");
+                    // Call your registration logic here
                 }
-            }
-
-            #[cfg(not(feature = "uses_gui"))]
-            {
-                eprintln!("GUI support is not enabled. Rebuild with the `uses_gui` feature.");
-                log::error!("GUI support is not enabled. Rebuild with the `uses_gui` feature.");
-                std::process::exit(1);
-            }
-            std::process::exit(0);
-        }
-
-        log::debug!("Received URL: {}", raw_url);
-        println!("Received URL: {:?}", raw_url);
-    }
-    let log_file_path = std::fs::canonicalize(log_file_path)?.display().to_string();
-    println!("Log file: {}", log_file_path);
-
-    if args.len() > 2 && args[1] == "--close-target" {
-        let target_id = &args[2];
-        let timeout_seconds: u64 = if let Some(arg) = args.get(4) {
-            match arg.parse::<u64>() {
-                Ok(value) => value,
-                Err(_) => {
-                    println!("Invalid timeout value provided: {}", arg);
-                    0
-                }
-            }
-        } else {
-            0
-        };
-
-        log::debug!(
-            "Waiting {} seconds before closing target {}...",
-            timeout_seconds,
-            target_id
-        );
-        std::thread::sleep(std::time::Duration::from_secs(timeout_seconds));
-
-        if let Err(e) = close_tab_by_target_id(target_id).await {
-            log::debug!("Failed to close target {}: {}", target_id, e);
-        } else {
-            log::debug!("Successfully closed target {}", target_id);
-        }
-        std::process::exit(0);
-    }
-    if args.len() > 1 && args[1] == "--register" {
-        let exe_path = std::env::current_exe()?
-            .to_str()
-            .unwrap()
-            .replace("\\", "\\\\");
-        let reg_content = format!(
-            "Windows Registry Editor Version 5.00\n\n\
-            [HKEY_CLASSES_ROOT\\debugchrome]\n\
-            @=\"URL:Debug Chrome Protocol\"\n\
-            \"URL Protocol\"=\"\"\n\
-            [HKEY_CLASSES_ROOT\\debugchrome\\shell\\open\\command]\n\
-            @=\"\\\"{}\\\" \\\"%1\\\"\"\n",
-            exe_path
-        );
-        let mut file = File::create("debugchrome.reg")?;
-        file.write_all(reg_content.as_bytes())?;
-        println!("Written debugchrome.reg with path: {}", exe_path);
-        if let Err(e) = Command::new("regedit")
-            .args(["/s", "debugchrome.reg"])
-            .spawn()
-            .and_then(|mut child| child.wait())
-        {
-            println!("Failed to register debugchrome protocol: {}", e);
-            println!("Press Enter to run an elevated powershell or Ctrl+C to exit.");
-            let mut input = String::new();
-            let _ = std::io::stdin().read_line(&mut input);
-            if let Err(e) = Command::new("powershell")
-                .args([
-                    "-Command",
-                    "Start-Process",
-                    "powershell",
-                    "-ArgumentList",
-                    &format!("'{}'", "regedit /s debugchrome.reg"),
-                    "-Verb",
-                    "runAs",
-                ])
-                .spawn()
-                .and_then(|mut child| child.wait())
-            {
-                println!("Failed to elevate and register debugchrome protocol: {}", e);
-            } else {
-                println!("Registered debugchrome protocol successfully with elevation.");
-            }
-        } else {
-            println!("Registered debugchrome protocol successfully.");
-        }
-        return Ok(());
-    }
-    let mut keep_focus = false;
-    // Capture the current focused window if !keep_focus is set
-    #[cfg(target_os = "windows")]
-    let previous_window = get_focused_window();
-    if args.len() > 2 && args[1] == "--search" {
-        let search_id = &args[2];
-        let close_tab = args.get(3).map(|arg| arg == "--close").unwrap_or(false);
-
-        match search_tabs_for_bang_id(search_id).await {
-            Ok(Some((target_id, title, url))) => {
-                log::debug!("Found tab with bangId {}: {} ({})", search_id, title, url);
-
-                if close_tab {
-                    log::debug!("Closing tab with bangId {}...", search_id);
-                    if let Err(e) = close_tab_by_target_id(&target_id).await {
-                        log::debug!("Failed to close tab: {}", e);
-                    } else {
-                        log::debug!("Tab with bangId {} closed successfully.", search_id);
+                Commands::Search { id, close } => {
+                    println!("Searching for bang ID: {}", id);
+                    if close {
+                        println!("Closing tab with bang ID: {}", id);
+                        // Call your close logic here
                     }
+                    // Call your search logic here
+                }
+                Commands::CloseTarget { id, timeout } => {
+                    println!("Closing target ID: {} after {} seconds", id, timeout);
+                    // Call your close target logic here
                 }
             }
-            Ok(None) => {
-                log::debug!("No tab found with bangId = {}", search_id);
-            }
-            Err(e) => {
-                log::debug!("Failed to search tabs: {}", e);
-            }
+        } else {
+            println!("No command provided. Running default behavior...");
         }
-        #[cfg(target_os = "windows")]
-        finalize_actions(previous_window, keep_focus);
-        return Ok(());
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    });
+    loop {
+        println!("Running...");
+        cef::run_message_loop();
+        std::thread::sleep(Duration::from_secs(1));
     }
+    let window = window.lock().expect("Failed to lock window");
+    let window = window.as_ref().expect("Window is None");
+    assert!(window.has_one_ref());
 
-    if args.len() > 1 {
-        let raw_url = &args[1];
-        let translated = raw_url.replacen("debugchrome://", "", 1);
-        let translated = translated.replacen("debugchrome:", "", 1);
-        let (clean_url, bangs) = split_and_process_url(&translated);
-        let user_data_dir = std::env::temp_dir().join("debugchrome");
-        // Check if the !keep_focus parameter is present
-        keep_focus = bangs.get("keep_focus").is_some();
-        log::debug!("keep_focus: {}", keep_focus);
+    cef::shutdown();
+    std::process::exit(0);
 
-        // Check if the CDP server is running
-        if !is_cdp_server_running().await {
-            log::debug!(
-                "CDP server is not running. Preparing Chrome profile and launching Chrome..."
-            );
+    // let mut cef_module = cef_browser::CefModule::new();
 
-            // Prepare Chrome profile
-            let user_data_dir = prepare_chrome_profile(true)?;
-            log::debug!("User data cloned to: {}", user_data_dir.display());
+    // // Initialize CEF for the main process
+    // cef_module.initialize();
+    // // Handle subprocess logic
+    // if cef_module.handle_subprocess() {
+    //     return Ok(());
+    // }
 
-            // Launch Chrome
-            launch_chrome(&user_data_dir)?;
-            log::debug!("Chrome launched successfully. Waiting for the CDP server to start...");
-        } else {
-            log::debug!("CDP server is already running.");
-        }
 
-        // Check if the bangId is already open
-        let parsed_url = match url::Url::parse(&clean_url) {
-            Ok(url) => url,
-            Err(e) => {
-                log::debug!("Failed to parse URL: {}", e);
-                // sleep(std::time::Duration::from_secs(30)); // Ensure sleep even on error
-                return Err(std::io::Error::new(std::io::ErrorKind::Other, e));
-            }
-        };
-        let open_window = bangs.get("openwindow").is_some();
-        let close = bangs.get("close").is_some();
-        let refresh = bangs.get("refresh").is_some();
-        let screenshot = bangs.get("screenshot").is_some();
-        let timeout_seconds = bangs.get("timeout").and_then(|v| v.parse::<u64>().ok());
-        let monitor_index = bangs.get("monitor").and_then(|v| v.parse::<usize>().ok());
-        let dpi_scaling_enabled = bangs
-            .get("dpi")
-            .map(|v| v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-        log::debug!("DPI scaling enabled: {}", dpi_scaling_enabled);
+    // // Parse arguments using clap
+    // let parsed_args = AppArgs::parse();
 
-        #[cfg(target_os = "windows")]
-        let bounds = get_screen_bounds(&bangs, monitor_index, dpi_scaling_enabled);
-        #[cfg(not(target_os = "windows"))]
-        let bounds: Option<(i32, i32, i32, i32)> = None;
-        log::debug!("bangs: {:?}", bangs);
-        log::debug!("Parsed URL: {}", parsed_url);
-        if let Some(bang_id) = bangs.get("id").cloned() {
-            log::debug!("Searching for bangId: {}", bang_id);
-            if let Some((target_id, title, _url)) = search_tabs_for_bang_id(&bang_id)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
-                .await?
-            {
-                log::debug!(
-                    "Tab with bangId {} title {} is already open: {}",
-                    bang_id,
-                    title,
-                    target_id
-                );
+    // // Handle application logic
+    // if parsed_args.cef {
+    //     println!("Launching integrated CEF browser...");
+    //     let url = parsed_args.url.unwrap_or_else(|| "https://www.google.com".to_string());
+    //     cef_module.launch_browser(&url);
+    //     cef_module.shutdown();
+    //     return Ok(());
+    // }
 
-                // Activate the tab
-                if let Err(e) = activate_tab(&target_id).await {
-                    log::debug!("Failed to activate tab: {}", e);
-                }
-                if let Some((x, y, w, h)) = bounds {
-                    println!("Setting window bounds: x={}, y={}, w={}, h={}", x, y, w, h);
-                    #[cfg(target_os = "windows")]
-                    set_window_bounds(&target_id, x, y, w, h).await.ok();
-                    #[cfg(target_os = "windows")]
-                    bring_chrome_to_front_and_resize_with_powershell(bounds);
-                }
+    // if let Some(command) = parsed_args.command {
+    //     match command {
+    //         Commands::Register => {
+    //             println!("Registering debugchrome protocol...");
+    //             // Call your registration logic here
+    //         }
+    //         Commands::Search { id, close } => {
+    //             println!("Searching for bang ID: {}", id);
+    //             if close {
+    //                 println!("Closing tab with bang ID: {}", id);
+    //             }
+    //             // Call your search logic here
+    //         }
+    //         Commands::CloseTarget { id, timeout } => {
+    //             println!("Closing target ID: {} after {} seconds", id, timeout);
+    //             // Call your close target logic here
+    //         }
+    //     }
+    // }
 
-                // if let Err(e) = set_tab_title(&target_id, &target_id){
-                //     log::debug!("Failed to set tab title: {}", e);
-                // }
-                // if let Some(hwnd) = find_chrome_hwnd_by_title(&target_id) {
-                //     bring_hwnd_to_front(hwnd);
-                // } else {
-                //     log::debug!("Failed to find Chrome window with title '{}'.",&target_id);
-                // }
-                // set_tab_title(&target_id, &title).ok();
-                if refresh {
-                    log::debug!("Refreshing tab with bangId {}: {}", bang_id, target_id);
-                    refresh_tab(&target_id).await.ok();
-                }
-                log::debug!(
-                    "Tab with bangId {} is already open, activating it.",
-                    bang_id
-                );
-                if close {
-                    log::debug!("Closing tab with bangId {}...", target_id);
-                    if let Err(e) = close_tab_by_target_id(&target_id).await {
-                        log::debug!("Failed to close tab: {}", e);
-                    } else {
-                        log::debug!("Tab with bangId {} closed successfully.", target_id);
-                    }
-                }
-
-                if let Some(timeout_seconds) = timeout_seconds {
-                    log::debug!(
-                        "Setting timeout of {} seconds to close target {}...",
-                        timeout_seconds,
-                        target_id
-                    );
-                    spawn_timeout_closer(target_id.clone(), timeout_seconds).ok();
-                }
-                #[cfg(target_os = "windows")]
-                finalize_actions(previous_window, keep_focus);
-                return Ok(());
-            }
-        }
-        log::debug!("{} not found, opening.", clean_url);
-        let result = if open_window {
-            open_window_via_devtools(&clean_url, &bangs).await
-        } else {
-            open_tab_via_devtools_and_return_id(&clean_url, &bangs).await
-        };
-        #[cfg(target_os = "windows")]
-        finalize_actions(previous_window, keep_focus);
-        if let Ok(target_id) = result {
-            // if let Some((x, y, w, h)) = bounds {
-            //     #[cfg(target_os = "windows")]
-            //     set_window_bounds(&target_id, x, y, w, h).await.ok();
-            //     #[cfg(target_os = "windows")]
-            //     bring_chrome_to_front_and_resize_with_powershell(bounds);
-            // }
-            // if let Some(hwnd) = find_chrome_hwnd_by_title(&target_id) {
-            //     bring_hwnd_to_front(hwnd);
-            // } else {
-            //     log::debug!("Failed to find Chrome window with title '{}'.",&target_id);
-            // }
-            if screenshot {
-                if let Err(e) = take_screenshot(&target_id).await {
-                    log::debug!("Failed to take screenshot: {}", e);
-                    // std::thread::sleep(std::time::Duration::from_secs(3)); // Ensure sleep even on error
-                    #[cfg(target_os = "windows")]
-                    finalize_actions(previous_window, keep_focus);
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!("{}", e),
-                    ));
-                }
-            }
-
-            // Call set_bang_id to set the bangId in the tab
-            log::debug!("Setting bangId in the tab...{}", &clean_url);
-            if let Err(e) =
-                set_bang_id_session(&target_id, &bangs.get("id").cloned().unwrap_or_default()).await
-            {
-                log::debug!("Failed to set bangId: {}", e);
-            }
-            if let Some(timeout_seconds) = timeout_seconds {
-                log::debug!(
-                    "Setting timeout of {} seconds to close target {}...",
-                    timeout_seconds,
-                    target_id
-                );
-                spawn_timeout_closer(target_id.clone(), timeout_seconds).ok();
-            }
-        } else {
-            let window_position = if let Some((x, y, _, _)) = bounds {
-                Some(format!("--window-position={},{}", x, y))
-            } else {
-                None
-            };
-
-            let window_size = if let Some((_, _, w, h)) = bounds {
-                Some(format!("--window-size={},{}", w, h))
-            } else {
-                None
-            };
-
-            let mut args = String::from(
-                "/C start  chrome.exe --remote-debugging-port=9222 --enable-automation --no-first-run",
-            );
-            args.push_str(&format!(
-                " --user-data-dir={} {}",
-                user_data_dir.display(),
-                clean_url
-            ));
-
-            if let Some(position) = window_position {
-                args.push_str(&format!(" {}", position));
-            }
-
-            if let Some(size) = window_size {
-                args.push_str(&format!(" {}", size));
-            }
-
-            Command::new("cmd").args(args.split_whitespace()).spawn()?;
-        }
-
-        log::debug!("Requested debug Chrome with URL: {}", translated);
-    } else {
-        println!("Usage:");
-        println!(
-            "  debugchrome.exe \"debugchrome:https://www.rust-lang.org?!x=0&!y=0&!w=800&!h=600&!id=123\""
-        );
-        println!("  debugchrome.exe --search 123");
-        println!("  debugchrome.exe --register");
-    }
-    #[cfg(target_os = "windows")]
-    finalize_actions(previous_window, keep_focus);
-
-    Ok(())
+    // Ok(())
 }
 
 async fn open_window_via_devtools(

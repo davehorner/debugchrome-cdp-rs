@@ -188,36 +188,64 @@ impl ImplBrowserProcessHandler for DemoBrowserProcessHandler {
         self.object.cast()
     }
 
-    // The real lifespan of cef starts from `on_context_initialized`, so all the cef objects should be manipulated after that.
     fn on_context_initialized(&self) {
         println!("CEF context initialized");
 
-        // Access the shared URL
-        let url = {
-            let shared_url = self.shared_url.lock().unwrap();
-            shared_url.clone().unwrap_or_else(|| "https://www.google.com".to_string())
-        };
+        // Define URLs for the two windows
+        let window1_urls = vec![
+            "https://www.google.com",
+            "https://www.github.com",
+            "https://www.rust-lang.org",
+        ];
+        let window2_urls = vec![
+            "https://www.microsoft.com",
+            "https://www.apple.com",
+            "https://www.openai.com",
+        ];
 
-        println!("Launching browser with URL: {}", url);
+        // Create the first window with three tabs
+        self.create_window_with_tabs(window1_urls);
 
-        let mut client = DemoClient::new();
-        let url = CefString::from(url.as_str());
+        // Create the second window with three tabs
+        self.create_window_with_tabs(window2_urls);
+    }
+}
 
-        let browser_view = browser_view_create(
-            Some(&mut client),
-            Some(&url),
-            Some(&Default::default()),
-            Option::<&mut DictionaryValue>::None,
-            Option::<&mut RequestContext>::None,
-            Option::<&mut BrowserViewDelegate>::None,
-        )
-        .expect("Failed to create browser view");
+impl DemoBrowserProcessHandler {
+    fn create_window_with_tabs(&self, urls: Vec<&str>) {
+        let mut browser_views = Vec::new();
 
-        let mut delegate = DemoWindowDelegate::new(browser_view);
+        // Create a browser view for each URL
+        for url in urls {
+            let mut client = DemoClient::new();
+            let url = CefString::from(url);
+
+            let browser_view = browser_view_create(
+                Some(&mut client),
+                Some(&url),
+                Some(&Default::default()),
+                Option::<&mut DictionaryValue>::None,
+                Option::<&mut RequestContext>::None,
+                Option::<&mut BrowserViewDelegate>::None,
+            )
+            .expect("Failed to create browser view");
+
+            browser_views.push(browser_view);
+        }
+
+        // Create a top-level window and add all browser views (tabs)
+        let mut delegate = DemoWindowDelegate::new(browser_views[0].clone());
         if let Ok(mut window) = self.window.lock() {
             *window = Some(
                 window_create_top_level(Some(&mut delegate)).expect("Failed to create window"),
             );
+
+            if let Some(window) = window.as_mut() {
+                for browser_view in browser_views {
+                    window.add_child_view(Some(&mut browser_view.clone()));
+                }
+                window.show();
+            }
         }
     }
 }

@@ -1,56 +1,27 @@
 [package]
-description = "A protocol‐handler for launching & controlling Chrome via CDP"
-license = "MIT"
-repository = "https://github.com/davehorner/debugchrome-cdp-rs"
-homepage = "https://github.com/davehorner/debugchrome-cdp-rs"
-keywords = ["chrome", "cdp", "protocol-handler"]
-categories = [
-    "command-line-utilities",
-    "os::windows-apis",
-    "web-programming::websocket",
-    "development-tools::debugging"
-]
-readme = "README.md"
-name = "debugchrome-cdp-rs"
-version = "0.1.9"
+name = "cef-dbg-browser"
+version = "0.1.0"
 edition = "2024"
 
-[workspace]
-members = ["debugchrome-cef"]
-
-[features]
-default = ["uses_gui","uses_funny"]
-egui = ["dep:egui"]
-eframe = ["dep:eframe"]
-uses_funny = []
-uses_gui = ["egui", "eframe","salvo","egui_extras","syn","serde_json","serde","egui-snarl","once_cell","dashmap"]
-salvo = ["dep:salvo"]
-egui-snarl = ["dep:egui-snarl"]
-egui_extras = ["dep:egui_extras"]
-syn = ["dep:syn"]
-serde = ["dep:serde"]
-serde_json = ["dep:serde_json"]
-dashmap = ["dep:dashmap"]
-once_cell = ["dep:once_cell"]
 
 [[bin]]
-name = "debugchrome"
+name = "cef-dbg-browser"
 path = "src/main.rs"
-
-[[bin]]
-name = "debugchrome-cef"
-path = "debugchrome-cef/src/main.rs"
 
 [dependencies]
 active-win-pos-rs = "0.9.0"
 base64 = "0.22.1"
+cef = "135.0.22"
+cef-dll-sys = "135.0.22"
 chrono = "0.4.41"
+clap = { version = "4.5.37", features = ["derive"] }
 dashmap = { version = "6.1.0", optional = true }
 dirs = "6.0.0"
 eframe = { version = "0.31.1", optional = true, features = ["serde", "persistence"] }
 egui = { version = "0.31.1", optional = true }
 egui-snarl = { version = "0.7.1", optional = true, features = ["egui-probe", "serde"] }
 egui_extras = { version = "0.31.1", optional = true, features = ["all_loaders"] }
+env_logger = "0.11.8"
 fs2 = "0.4.3"
 futures = "0.3.31"
 futures-util = "0.3.31"

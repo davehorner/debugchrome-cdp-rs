@@ -2,27 +2,17 @@
 
 use dashmap::DashMap;
 use eframe::{App, CreationContext};
-use egui::{Color32, Id, Ui};
-use egui_snarl::{
-    InPin, InPinId, NodeId, OutPin, OutPinId, Snarl,
-    ui::{
-        AnyPins, NodeLayout, PinInfo, PinPlacement, SnarlStyle, SnarlViewer, WireStyle, //SnarlWidget,
-    },
-};
+use egui::Color32;
 use futures_util::SinkExt;
 use futures_util::StreamExt;
 use once_cell::sync::OnceCell;
 use salvo::prelude::*;
 use serde_json::json;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use which::which;
-
-// Global reference to the Snarl instance
-pub static GLOBAL_SNARL: OnceCell<Mutex<Snarl<DemoNode>>> = OnceCell::new();
 
 const STRING_COLOR: Color32 = Color32::from_rgb(0x00, 0xb0, 0x00);
 const NUMBER_COLOR: Color32 = Color32::from_rgb(0xb0, 0x00, 0x00);
@@ -347,58 +337,58 @@ struct DemoViewer;
 //                             let new_idx =
 //                                 new_bindings.iter().position(|new_name| *new_name == *name);
 
-    //                             match new_idx {
-    //                                 None => {
-    //                                     snarl.drop_inputs(old_inputs[idx].id);
-    //                                 }
-    //                                 Some(new_idx) if new_idx != idx => {
-    //                                     let new_in_pin = InPinId {
-    //                                         node: pin.id.node,
-    //                                         input: new_idx,
-    //                                     };
-    //                                     for &remote in &old_inputs[idx].remotes {
-    //                                         snarl.disconnect(remote, old_inputs[idx].id);
-    //                                         snarl.connect(remote, new_in_pin);
-    //                                     }
-    //                                 }
-    //                                 _ => {}
-    //                             }
-    //                         }
-    //                     }
-    //                 }
-    //                 PinInfo::circle()
-    //                     .with_fill(STRING_COLOR)
-    //                     .with_wire_style(WireStyle::AxisAligned {
-    //                         corner_radius: 10.0,
-    //                     })
-    //             }
-    //             DemoNode::ExprNode(ref expr_node) => {
-    //                 if pin.id.input <= expr_node.bindings.len() {
-    //                     match &*pin.remotes {
-    //                         [] => {
-    //                             let node = &mut snarl[pin.id.node];
-    //                             ui.label(node.label_in(pin.id.input));
-    //                             ui.add(egui::DragValue::new(node.number_in(pin.id.input)));
-    //                             PinInfo::circle().with_fill(NUMBER_COLOR)
-    //                         }
-    //                         [remote] => {
-    //                             let new_value = snarl[remote.node].number_out();
-    //                             let node = &mut snarl[pin.id.node];
-    //                             ui.label(node.label_in(pin.id.input));
-    //                             ui.label(format_float(new_value));
-    //                             *node.number_in(pin.id.input) = new_value;
-    //                             PinInfo::circle().with_fill(NUMBER_COLOR)
-    //                         }
-    //                         _ => unreachable!("Expr pins has only one wire"),
-    //                     }
-    //                 } else {
-    //                     ui.label("Removed");
-    //                     PinInfo::circle().with_fill(Color32::BLACK)
-    //                 }
-    //             }
-    //         }
-    //     }
-    
+//                             match new_idx {
+//                                 None => {
+//                                     snarl.drop_inputs(old_inputs[idx].id);
+//                                 }
+//                                 Some(new_idx) if new_idx != idx => {
+//                                     let new_in_pin = InPinId {
+//                                         node: pin.id.node,
+//                                         input: new_idx,
+//                                     };
+//                                     for &remote in &old_inputs[idx].remotes {
+//                                         snarl.disconnect(remote, old_inputs[idx].id);
+//                                         snarl.connect(remote, new_in_pin);
+//                                     }
+//                                 }
+//                                 _ => {}
+//                             }
+//                         }
+//                     }
+//                 }
+//                 PinInfo::circle()
+//                     .with_fill(STRING_COLOR)
+//                     .with_wire_style(WireStyle::AxisAligned {
+//                         corner_radius: 10.0,
+//                     })
+//             }
+//             DemoNode::ExprNode(ref expr_node) => {
+//                 if pin.id.input <= expr_node.bindings.len() {
+//                     match &*pin.remotes {
+//                         [] => {
+//                             let node = &mut snarl[pin.id.node];
+//                             ui.label(node.label_in(pin.id.input));
+//                             ui.add(egui::DragValue::new(node.number_in(pin.id.input)));
+//                             PinInfo::circle().with_fill(NUMBER_COLOR)
+//                         }
+//                         [remote] => {
+//                             let new_value = snarl[remote.node].number_out();
+//                             let node = &mut snarl[pin.id.node];
+//                             ui.label(node.label_in(pin.id.input));
+//                             ui.label(format_float(new_value));
+//                             *node.number_in(pin.id.input) = new_value;
+//                             PinInfo::circle().with_fill(NUMBER_COLOR)
+//                         }
+//                         _ => unreachable!("Expr pins has only one wire"),
+//                     }
+//                 } else {
+//                     ui.label("Removed");
+//                     PinInfo::circle().with_fill(Color32::BLACK)
+//                 }
+//             }
+//         }
+//     }
+
 //     #[allow(refining_impl_trait)]
 //     fn show_output(&mut self, pin: &OutPin, ui: &mut Ui, snarl: &mut Snarl<DemoNode>) -> PinInfo {
 //         match snarl[pin.id.node] {
@@ -944,41 +934,9 @@ impl Expr {
 use std::sync::mpsc::Receiver;
 
 pub struct DemoApp {
-    snarl: Snarl<DemoNode>,
-    style: SnarlStyle,
     shared_state: Arc<SharedState>,        // Shared state
     update_receiver: Option<Receiver<()>>, // Receiver for update signals
     stop_monitoring: watch::Sender<bool>,  // Signal to stop monitoring
-}
-
-const fn default_style() -> SnarlStyle {
-    SnarlStyle {
-        node_layout: Some(NodeLayout::FlippedSandwich),
-        pin_placement: Some(PinPlacement::Edge),
-        pin_size: Some(7.0),
-        node_frame: Some(egui::Frame {
-            inner_margin: egui::Margin::same(8),
-            outer_margin: egui::Margin {
-                left: 0,
-                right: 0,
-                top: 0,
-                bottom: 4,
-            },
-            corner_radius: egui::CornerRadius::same(8),
-            fill: egui::Color32::from_gray(30),
-            stroke: egui::Stroke::NONE,
-            shadow: egui::Shadow::NONE,
-        }),
-        bg_frame: Some(egui::Frame {
-            inner_margin: egui::Margin::ZERO,
-            outer_margin: egui::Margin::same(2),
-            corner_radius: egui::CornerRadius::ZERO,
-            fill: egui::Color32::from_gray(40),
-            stroke: egui::Stroke::NONE,
-            shadow: egui::Shadow::NONE,
-        }),
-        ..SnarlStyle::new()
-    }
 }
 
 impl DemoApp {
@@ -991,16 +949,6 @@ impl DemoApp {
         } else {
             cx.egui_ctx.set_visuals(egui::Visuals::light());
         }
-        let snarl = initialize_global_snarl(cx.storage.expect("Storage is not available"));
-        // // Initialize GLOBAL_SNARL using the initialize_global_snarl function
-        // let snarl = initialize_global_snarl(cx.storage.expect("Storage is not available"));
-
-        let style = cx.storage.map_or_else(default_style, |storage| {
-            storage
-                .get_string("style")
-                .and_then(|style| serde_json::from_str(&style).ok())
-                .unwrap_or_else(default_style)
-        });
 
         egui_extras::install_image_loaders(&cx.egui_ctx);
 
@@ -1098,8 +1046,6 @@ impl DemoApp {
         });
 
         DemoApp {
-            snarl: snarl.lock().unwrap().clone(),
-            style,
             shared_state,
             update_receiver: Some(update_rx),
             stop_monitoring: stop_monitoring_tx, // Use the original sender here
@@ -1109,10 +1055,6 @@ impl DemoApp {
     fn graceful_exit(&mut self) {
         println!("Performing cleanup before exiting...");
 
-        // Save the application state
-        if let Some(global_snarl) = GLOBAL_SNARL.get() {
-            self.snarl = global_snarl.lock().unwrap().clone(); // Synchronize with GLOBAL_SNARL
-        }
         println!("Saving state...");
         // if let Some(storage) = storage {
         //     self.save(storage);
@@ -1469,7 +1411,7 @@ impl App for DemoApp {
         // });
 
         // Right panel for port number, messages, and tabs
-        let mut shared_port = {
+        let shared_port = {
             self.shared_state.port.try_lock() // Use blocking_lock to avoid async context
         };
         egui::SidePanel::right("right_panel")
@@ -1481,7 +1423,7 @@ impl App for DemoApp {
                 ui.separator();
 
                 // Port number input
-                let mut port = 5800; // Default port
+                let port = 5800; // Default port
                 // port = *shared_port;
                 // if ui.add(egui::DragValue::new(&mut port).clamp_range(1024..=65535)).changed() {
                 //     *shared_port = port;
@@ -1607,19 +1549,6 @@ impl App for DemoApp {
 
             // Render the Snarl graph
             // Render the Snarl graph using DashMap
-            if GLOBAL_SNARL.get().is_none() {
-                println!("GLOBAL_SNARL is not initialized yet");
-                return;
-                // } else {
-                //     println!("GLOBAL_SNARL is initialized");
-            }
-
-            let mut snarl = GLOBAL_SNARL
-                .get()
-                .expect("GLOBAL_SNARL is not initialized")
-                .lock()
-                .unwrap();
-
 
             // // Display the nodes in the Snarl graph
             // ui.label("Nodes:");
@@ -1638,15 +1567,7 @@ impl App for DemoApp {
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        if let Some(global_snarl) = GLOBAL_SNARL.get() {
-            self.snarl = global_snarl.lock().unwrap().clone(); // Synchronize with GLOBAL_SNARL
-        }
         println!("Saving state...");
-        let snarl = serde_json::to_string(&self.snarl).unwrap();
-        storage.set_string("snarl", snarl);
-
-        let style = serde_json::to_string(&self.style).unwrap();
-        storage.set_string("style", style);
     }
 }
 
@@ -1747,33 +1668,6 @@ impl Default for SharedState {
     }
 }
 
-// Handler to return the current Snarl graph as JSON
-#[handler]
-async fn get_snarl_handler(_depot: &mut Depot) -> String {
-    // let state = depot.obtain::<Arc<SharedState>>().unwrap();
-    // let snarl: Vec<_> = state.snarl.iter().map(|entry| (entry.key().clone(), entry.value().clone())).collect();
-    // serde_json::to_string(&snarl).unwrap()
-    let snarl = GLOBAL_SNARL
-        .get()
-        .expect("GLOBAL_SNARL is not initialized")
-        .lock()
-        .unwrap();
-    serde_json::to_string(&*snarl).unwrap()
-}
-
-// Handler to update the Snarl graph from JSON
-#[handler]
-async fn update_snarl_handler(_req: &mut Request, _depot: &mut Depot) -> String {
-    // let state = depot.obtain::<Arc<SharedState>>().unwrap();
-    // let new_nodes: Vec<(NodeId, DemoNode)> = req.parse_json().await.unwrap();
-
-    // for (node_id, node) in new_nodes {
-    //     state.snarl.insert(node_id, node);
-    // }
-
-    "Snarl graph updated!".to_string()
-}
-
 // Handler to log a message and return the current state
 #[handler]
 async fn hello_handler(depot: &mut Depot) -> String {
@@ -1827,8 +1721,6 @@ pub async fn start_server(shared_state: Arc<SharedState>) {
     let router = Router::new()
         .hoop(affix_state::inject(shared_state)) // Inject shared state
         .get(hello_handler)
-        .push(Router::with_path("snarl").get(get_snarl_handler))
-        .push(Router::with_path("snarl").post(update_snarl_handler))
         .push(Router::with_path("tabs").get(get_tabs_handler))
         .push(Router::with_path("tabs").post(update_tabs_handler))
         .push(Router::with_path("hello").get(hello_handler));
@@ -2352,24 +2244,6 @@ async fn process_cdp(
     }
 }
 
-fn initialize_global_snarl(storage: &dyn eframe::Storage) -> &Mutex<Snarl<DemoNode>> {
-    println!("Initializing GLOBAL_SNARL...");
-    // std::process::exit(1);
-    GLOBAL_SNARL.get_or_init(|| {
-        let mut snarl: Snarl<DemoNode> = storage
-            .get_string("snarl")
-            .and_then(|snarl| serde_json::from_str(&snarl).ok())
-            .unwrap_or_default(); // Fallback to default Snarl if deserialization fails
-
-        // Add a default node for testing if the Snarl is empty
-        if snarl.nodes().count() == 0 {
-            snarl.insert_node(egui::Pos2::new(100.0, 100.0), DemoNode::Number(42.0));
-        }
-
-        println!("GLOBAL_SNARL initialized with: {:?}", snarl);
-        Mutex::new(snarl)
-    })
-}
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
@@ -2400,12 +2274,11 @@ fn launch_chrome(user_data_dir: &Path, shared_state: Arc<SharedState>) -> io::Re
     #[cfg(not(target_os = "windows"))]
     let chrome_path = which("chrome").ok();
 
-
     #[cfg(target_os = "windows")]
     let process = if let Some(chrome_path) = chrome_path {
         println!("Found Chrome executable at: {}", chrome_path.display());
-    
-            Command::new(chrome_path)
+
+        Command::new(chrome_path)
             .args([
                 "--remote-debugging-port=9222",
                 "--enable-automation",
@@ -2413,9 +2286,11 @@ fn launch_chrome(user_data_dir: &Path, shared_state: Arc<SharedState>) -> io::Re
                 &format!("--user-data-dir={}", user_data_dir.display()),
             ])
             .spawn()?
-        } else {
-            eprintln!("Warning: Chrome executable not found in registry or PATH using start (no HWND lookup)");
-            Command::new("cmd")
+    } else {
+        eprintln!(
+            "Warning: Chrome executable not found in registry or PATH using start (no HWND lookup)"
+        );
+        Command::new("cmd")
             .args([
                 "/C",
                 "start",
@@ -2426,7 +2301,7 @@ fn launch_chrome(user_data_dir: &Path, shared_state: Arc<SharedState>) -> io::Re
                 &format!("--user-data-dir={}", user_data_dir.display()),
             ])
             .spawn()?
-        };
+    };
 
     #[cfg(not(target_os = "windows"))]
     let process = if let Some(chrome_path) = chrome_path {
@@ -2439,7 +2314,10 @@ fn launch_chrome(user_data_dir: &Path, shared_state: Arc<SharedState>) -> io::Re
             ])
             .spawn()?
     } else {
-        return Err(io::Error::new(io::ErrorKind::NotFound, "Chrome executable not found"));
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "Chrome executable not found",
+        ));
     };
 
     let polling_shared_state = shared_state.clone();
@@ -2537,12 +2415,13 @@ pub async fn start_gui() -> eframe::Result<()> {
     );
 
     // Calculate days since last release
-    let days_since_release = if let Ok(last_date_parsed) = NaiveDate::parse_from_str(last_date, "%d/%m/%y") {
-        let today = Utc::now().naive_utc().date();
-        (today - last_date_parsed).num_days()
-    } else {
-        -1 // Fallback if parsing fails
-    };
+    let days_since_release =
+        if let Ok(last_date_parsed) = NaiveDate::parse_from_str(last_date, "%d/%m/%y") {
+            let today = Utc::now().naive_utc().date();
+            (today - last_date_parsed).num_days()
+        } else {
+            -1 // Fallback if parsing fails
+        };
 
     // Determine "custom" flag
     let custom_flag = if !GIT_SHA_CUR.is_empty() && GIT_SHA_CUR != *last_sha {
@@ -2554,11 +2433,7 @@ pub async fn start_gui() -> eframe::Result<()> {
     // Build the window title
     let title = format!(
         "debugchrome:\\ {} | {} {}  {} {}d old",
-        VERSION,
-        last_sha,
-        custom_flag,
-        BUILD_DATE,
-        days_since_release
+        VERSION, last_sha, custom_flag, BUILD_DATE, days_since_release
     );
 
     let ret = eframe::run_native(
@@ -2628,7 +2503,7 @@ use std::process;
 #[cfg(target_os = "windows")]
 use winapi::shared::windef::HWND;
 #[cfg(target_os = "windows")]
-use winapi::um::winuser::{FindWindowA, SetForegroundWindow};
+use winapi::um::winuser::SetForegroundWindow;
 #[cfg(target_os = "windows")]
 use winapi::um::winuser::{MB_ICONEXCLAMATION, MessageBeep};
 
@@ -2872,16 +2747,18 @@ fn find_hwnd_by_pid(pid: u32) -> Option<isize> {
             hwnd: winapi::shared::windef::HWND,
             lparam: winapi::shared::minwindef::LPARAM,
         ) -> i32 {
-            let data = &mut *(lparam as *mut EnumData); // Cast lparam to EnumData
-            let mut process_id = 0;
-            GetWindowThreadProcessId(hwnd, &mut process_id);
-            println!("Enumerating window: HWND={:?}, PID={}", hwnd, process_id);
-            if process_id == data.target_pid {
-                println!("MATCH: HWND={:?}, PID={}", hwnd, process_id);
-                data.hwnd = hwnd as isize; // Update the HWND in EnumData
-                return 0; // Stop enumeration
+            unsafe {
+                let data = &mut *(lparam as *mut EnumData); // Cast lparam to EnumData
+                let mut process_id = 0;
+                GetWindowThreadProcessId(hwnd, &mut process_id);
+                println!("Enumerating window: HWND={:?}, PID={}", hwnd, process_id);
+                if process_id == data.target_pid {
+                    println!("MATCH: HWND={:?}, PID={}", hwnd, process_id);
+                    data.hwnd = hwnd as isize; // Update the HWND in EnumData
+                    return 0; // Stop enumeration
+                }
+                1 // Continue enumeration
             }
-            1 // Continue enumeration
         }
 
         let mut data = EnumData {

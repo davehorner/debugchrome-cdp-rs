@@ -1,8 +1,8 @@
 // build.rs
-use std::{env, fs};
+use chrono::Datelike;
 use git2::Repository;
 use std::path::Path;
-use chrono::Datelike;
+use std::{env, fs};
 
 fn main() {
     if let Err(e) = try_main() {
@@ -50,7 +50,12 @@ fn try_main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Build date DD/MM/YY
     let now = chrono::Local::now();
-    let date = format!("{:02}/{:02}/{:02}", now.day(), now.month(), now.year() % 100);
+    let date = format!(
+        "{:02}/{:02}/{:02}",
+        now.day(),
+        now.month(),
+        now.year() % 100
+    );
 
     // Emit environment variables for compile time
     println!("cargo:rerun-if-changed=LAST_RELEASE");

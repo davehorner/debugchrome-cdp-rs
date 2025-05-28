@@ -815,15 +815,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "convert_case"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec182b0ca2f35d8fc196cf3404988fd8b8c739a4d270ff118a398feb0cbec1ca"
-dependencies = [
- "unicode-segmentation",
-]
-
-[[package]]
 name = "cookie"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -968,7 +959,7 @@ checksum = "5c297a1c74b71ae29df00c3e22dd9534821d60eb9af5a0192823fa2acea70c2a"
 
 [[package]]
 name = "debugchrome-cdp-rs"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "active-win-pos-rs",
  "base64 0.22.1",
@@ -977,7 +968,6 @@ dependencies = [
  "dirs",
  "eframe",
  "egui",
- "egui-snarl",
  "egui_extras",
  "fs2",
  "futures",
@@ -1166,41 +1156,6 @@ dependencies = [
  "profiling",
  "ron",
  "serde",
-]
-
-[[package]]
-name = "egui-probe"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3eb0383be4a7eff9c7d3c8638c31273e709f17bf3e263f1c9588d961b504185"
-dependencies = [
- "egui",
- "egui-probe-proc",
-]
-
-[[package]]
-name = "egui-probe-proc"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7f1716ac3c0e0c8f170192ba928935873dfa52c5636e9eea3fd475b9e7f6bce"
-dependencies = [
- "convert_case",
- "proc-easy",
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "egui-snarl"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33f9d0444c82253d14d968342581af59d2519325381ea21d8e258c0af18a1422"
-dependencies = [
- "egui",
- "egui-probe",
- "serde",
- "slab",
 ]
 
 [[package]]
@@ -3484,17 +3439,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "proc-easy"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea59c637cd0e6b71ae18e589854e9de9b7cb17fefdbf2047e42bd38e24285b19"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "proc-macro-crate"
 version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4348,7 +4292,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f92a496fb766b417c996b9c5e57daf2f7ad3b0bebe1ccfca4856390e3d3bb67"
 dependencies = [
  "autocfg",
- "serde",
 ]
 
 [[package]]

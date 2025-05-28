@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.10](https://github.com/davehorner/debugchrome-cdp-rs/compare/v0.1.9...v0.1.10) - 2025-05-28
+
+### Added
+
+- add .gitignore and remove unnecessary dependencies from Cargo.toml and Cargo.lock
+
 ## [0.1.9](https://github.com/davehorner/debugchrome-cdp-rs/compare/v0.1.8...v0.1.9) - 2025-05-07
 
 ### Fixed

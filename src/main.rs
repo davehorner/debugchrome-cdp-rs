@@ -1708,7 +1708,6 @@ fn adjust_for_dpi(x: i32, y: i32, w: i32, h: i32, dpi_scaling: f32) -> (i32, i32
     )
 }
 
-use std::fs::OpenOptions;
 use std::panic;
 
 fn setup_panic_hook() {
@@ -1769,13 +1768,7 @@ fn setup_panic_hook() {
     }));
 }
 
-use sysinfo::{Process, System};
-#[cfg(target_os = "windows")]
-use winapi::um::handleapi::CloseHandle;
-#[cfg(target_os = "windows")]
-use winapi::um::processthreadsapi::OpenProcess;
-#[cfg(target_os = "windows")]
-use winapi::um::winnt::PROCESS_QUERY_INFORMATION;
+use sysinfo::System;
 #[cfg(target_os = "windows")]
 use winapi::um::winuser::{GetWindowThreadProcessId, IsWindowVisible};
 
@@ -1791,24 +1784,26 @@ fn find_chrome_with_debug_port() -> Option<u32> {
         hwnd: winapi::shared::windef::HWND,
         lparam: winapi::shared::minwindef::LPARAM,
     ) -> i32 {
-        let data = &mut *(lparam as *mut EnumData);
+        unsafe {
+            let data = &mut *(lparam as *mut EnumData);
 
-        // Check if the window is visible
-        if IsWindowVisible(hwnd) == 0 {
-            return 1; // Continue enumeration
+            // Check if the window is visible
+            if IsWindowVisible(hwnd) == 0 {
+                return 1; // Continue enumeration
+            }
+
+            // Get the process ID for the window
+            let mut process_id = 0;
+            GetWindowThreadProcessId(hwnd, &mut process_id);
+
+            // Check if the process ID matches
+            if process_id == data.pid {
+                data.hwnd = Some(hwnd);
+                return 0; // Stop enumeration
+            }
+
+            1 // Continue enumeration
         }
-
-        // Get the process ID for the window
-        let mut process_id = 0;
-        GetWindowThreadProcessId(hwnd, &mut process_id);
-
-        // Check if the process ID matches
-        if process_id == data.pid {
-            data.hwnd = Some(hwnd);
-            return 0; // Stop enumeration
-        }
-
-        1 // Continue enumeration
     }
 
     // Create a system object to get process information

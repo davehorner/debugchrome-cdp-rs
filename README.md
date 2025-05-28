@@ -152,6 +152,19 @@ debugchrome.exe "debugchrome:https://www.rust-lang.org?!openwindow"
 - Opens the url as a new window instead of as a tab.
 - Example: `debugchrome.exe "debugchrome:https://www.rust-lang.org?!openwindow"` will open the url in a new window.
 
+### 12. **GUI Console**  
+   ![console](media/debugchrome-cdp-rs_console.jpg)
+    - When built with the `uses_gui` feature, launches an interactive egui-based console to view and manage Chrome debug sessions.  
+    - Also runs an embedded Salvo webserver (default port 5800) for HTTP API access.  
+    - Run with the empty protocol to start the GUI:  
+      ```
+      debugchrome.exe debugchrome:/
+      ```  
+    - Or launch it via any browser address bar or shell-exec protocol handler:  
+      ```
+      explorer.exe      debugchrome:/
+      ```
+
 
 ## Sample CLI
 1. **Open a url using cli**:
@@ -212,6 +225,30 @@ Output is minimal to stdout; detailed output can be found in `%USERPROFILE%\.car
 
 3. **It's not fast**:
    - If you need to scan 400 tabs; it is going to take some time.
+
+---
+
+## Stress Testing
+
+Included is a stress‐test script to verify `debugchrome` behavior:
+
+File: `test-scripts/stress-test01.py`  
+Description: Divides each connected monitor into a grid of windows and opens a placeholder image in each cell via `debugchrome.exe`.  
+Dependencies:
+- Python 3.8+
+- screeninfo (`pip install screeninfo`)
+- ctypes (stdlib)
+- concurrent.futures (stdlib)
+- debugchrome.exe (must be in PATH)
+
+Usage:
+```powershell
+python test-scripts\stress-test01.py
+```
+
+stress-test01.py screenshot:
+
+![stress-test01](media/debugchrome-cdp-rs_stress-test01.jpg)
 
 ---
 

@@ -29,33 +29,89 @@ The protocol works if you specify `debugchrome:` or `debugchrome://` before your
 
 1. **Open a url (brought to front and at location on screen)**:
    - Opens a specified URL with optional window placement / bounds (`!x`, `!y`, `!w`, `!h`).
+   - Supports `--direct` to open the URL directly, or uses a timed HTML redirect if omitted (see below).
+   - Supports `--redirect-seconds <N>` to set the delay for HTML-based redirects.
+2. **Script Execution**:
+   - Use `--script <js>` or `--script-file <path>` to execute JavaScript in the target tab after it opens.
+   - Example: `debugchrome.exe --script "alert('Hello from debugchrome!')" "debugchrome:https://www.rust-lang.org?!id=jsdemo"`
+   - Example: `debugchrome.exe --script-file myscript.js "debugchrome:https://www.rust-lang.org?!id=jsdemo"`
    - Example: `debugchrome:https://www.rust-lang.org?!x=0&!y=0&!w=800&!h=600`
    - Window bounds can be expressed as a percentage and relative to a monitor
    - Example: [`debugchrome://https://www.rustlang.org?!x=12.5%&!y=12.5%&!w=75%&!h=75%&!monitor=2`](debugchrome://https://www.rustlang.org?!x=12.5%&!y=12.5%&!w=75%&!h=75%&!monitor=2)
-2. **Set `id`**:
-   - Sets a custom `id` in the tab's JavaScript context(session storage so it persists refresh) using the `!id` parameter in the URL.
-   - Example: `debugchrome:https://www.rust-lang.org?x=0&y=0&w=800&h=600&!id=123`
+3. **Set `id` (bangId)**:
+   - Sets a custom `id` in the tab's JavaScript context (session storage so it persists refresh) using the `!id` parameter in the URL.
+   - If `!id` is present but empty, a timestamp-based ID is assigned automatically.
+   - Example: `debugchrome:https://www.rust-lang.org?!id=` (auto-assigns ID)
+   - Example: `debugchrome:https://www.rust-lang.org?!id=123`
    - This Id is used to annotate the url with an ID that can be used to find and interact with the tab.
-3. **Timeout**:
+4. **Diagnostics and Logging**:
+   - On Windows, logs HWND, PID, tab title, and URL for matched tabs to help with automation and troubleshooting.
+   - Lists all tabs and their parameters during window creation for easier debugging.
+5. **Timeout**:
    - `debugchrome` will wait for the specified number of seconds and then search and close the page automatically.
    - Example: `debugchrome://https://crates.io/crates/debugchrome-cdp-rs?!timeout=5`
-4. **Keep Focus**
+6. **Keep Focus**
    - Add a !keep_focus parameter in the url and the window that is currently active will be re-focused after the page is loaded.
    - Example: [`debugchrome://https://crates.io/crates/debugchrome-cdp-rs?!id=21jump&!keep_focus`](debugchrome://https://crates.io/crates/debugchrome-cdp-rs?!id=21jump&!keep_focus)
    This allows you to launch a url from cmd or powershell and not have the webpage take focus away from the terminal.
-5. **Take a Screenshot**:
+7. **Take a Screenshot**:
    - Captures a screenshot of the page and opens the default viewer for `.png`.
    - Example: `debugchrome:https://www.rust-lang.org?x=0&y=0&w=800&h=600&!id=123&!screenshot`
 
-6. **Search for Tabs by `bangId`**:
+8. **Search for Tabs by `bangId`**:
    - Searches all open tabs for a specific `bangId` and prints the matching tab's URL.
 
-7. **Register Custom Protocol**:
+9. **Register Custom Protocol**:
    - Registers the `debugchrome:` protocol in the Windows registry for easier usage.
 
 ---
 
 ## Usage
+### Direct vs. Redirect Launch
+
+By default, debugchrome uses a small HTML payload to redirect to the target URL after a delay (set by `--redirect-seconds`). Use `--direct` to skip the redirect and open the URL immediately.
+
+Examples:
+
+- Direct launch:
+  ```bash
+  debugchrome.exe --direct "debugchrome:https://www.rust-lang.org?!id=directdemo"
+  ```
+- Delayed redirect:
+  ```bash
+  debugchrome.exe --redirect-seconds 5 "debugchrome:https://www.rust-lang.org?!id=delaydemo"
+  ```
+### Script Execution
+
+You can execute JavaScript in the target tab using `--script` or `--script-file`:
+
+```bash
+debugchrome.exe --script "alert('Hello!')" "debugchrome:https://www.rust-lang.org?!id=jsdemo"
+debugchrome.exe --script-file myscript.js "debugchrome:https://www.rust-lang.org?!id=jsdemo"
+```
+### Automatic bangId Assignment
+
+If you specify `!id=` (empty), debugchrome will automatically assign a timestamp-based bangId for you. This ensures every tab can be tracked and controlled reliably.
+
+Example:
+```bash
+debugchrome.exe "debugchrome:https://www.rust-lang.org?!id="
+```
+### Diagnostics and Logging
+
+On Windows, debugchrome logs the HWND, PID, tab title, and URL for matched tabs. This information is printed to the console and written to the log file for automation and troubleshooting.
+
+Example output:
+```
+HWND: 0x0003059A
+PID: 12345
+TITLE: Rust - Empowering Everyone
+TARGET: 1a2b3c4d5e6f7g8h9i
+PAGE_URL: https://www.rust-lang.org
+```
+### Error Handling and Debug Logging
+
+Debugchrome now provides more robust error messages and detailed debug output throughout the tab lifecycle. Check the log file for diagnostics if something doesn't work as expected.
 
 Prefix any url with `debugchrome:` and that url will be processed by debugchrome.
 
@@ -251,6 +307,17 @@ stress-test01.py screenshot:
 ![stress-test01](media/debugchrome-cdp-rs_stress-test01.jpg)
 
 ---
+
+
+## Recent Features (0.1.11+)
+
+- **`--direct` and `--redirect-seconds` CLI flags**: Control whether a tab is launched directly to the target URL or via a timed HTML redirect. Useful for pages that block JavaScript or need a delay before navigation.
+- **Script execution**: Use `--script` or `--script-file` to inject and execute JavaScript in the target tab after launch.
+- **Automatic bang ID assignment**: If `!id` is present but empty, a timestamp-based ID is assigned automatically for reliable tab tracking.
+- **HWND, PID, title, and URL logging (Windows-only)**: When a tab is matched, its window handle, process ID, title, and URL are logged for diagnostics and automation.
+- **Flexible redirect logic**: Depending on `--direct` and delay, either inline navigation or an HTML-based redirect is used for robust tab opening.
+- **Improved diagnostics**: Tab listing and parameter logging during window creation for easier debugging and automation.
+- **Graceful error handling and debug logging**: More robust error messages and detailed debug output throughout the tab lifecycle.
 
 ## License
 

@@ -136,6 +136,22 @@ fn split_and_process_url(raw_url: &str) -> (String, std::collections::HashMap<St
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let args: Vec<String> = env::args().collect();
+    let mut redirect_seconds: Option<u64> = None;
+    let mut use_direct = false;
+    let mut i = 2;
+    while i < args.len() {
+        if args[i] == "--direct" {
+            use_direct = true;
+            i += 1;
+        } else if args[i] == "--redirect-seconds" && i + 1 < args.len() {
+            if let Ok(val) = args[i + 1].parse::<u64>() {
+                redirect_seconds = Some(val);
+            }
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
     // Set the current working directory to the directory of the executing binary
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
@@ -302,16 +318,57 @@ async fn main() -> std::io::Result<()> {
         finalize_actions(previous_window, keep_focus);
         return Ok(());
     }
-
+    let mut use_direct = false;
     if args.len() > 1 {
         let raw_url = &args[1];
         let translated = raw_url.replacen("debugchrome://", "", 1);
         let translated = translated.replacen("debugchrome:", "", 1);
-        let (clean_url, bangs) = split_and_process_url(&translated);
+        let (clean_url, mut bangs) = split_and_process_url(&translated);
+        let mut i = 2;
+        while i < args.len() {
+            if args[i] == "--direct" {
+                use_direct = true;
+                i += 1;
+            } else if args[i] == "--redirect-seconds" && i + 1 < args.len() {
+                if let Ok(val) = args[i + 1].parse::<u64>() {
+                    redirect_seconds = Some(val);
+                }
+                i += 2;
+            } else {
+                i += 1;
+            }
+        }
+        // If !id is present and empty, assign a new one based on time
+        if bangs.contains_key("id") && bangs.get("id").map(|v| v.is_empty()).unwrap_or(false) {
+            let timestamp_id = chrono::Local::now().format("%Y%m%d%H%M%S%3f").to_string();
+            bangs.insert("id".to_string(), timestamp_id);
+        }
         let user_data_dir = std::env::temp_dir().join("debugchrome");
         // Check if the !keep_focus parameter is present
         keep_focus = bangs.get("keep_focus").is_some();
         log::debug!("keep_focus: {}", keep_focus);
+
+        // --- SCRIPT ARGUMENT HANDLING ---
+        let mut script_to_run: Option<String> = None;
+        let mut i = 2;
+        while i < args.len() {
+            if args[i] == "--script" && i + 1 < args.len() {
+                script_to_run = Some(args[i + 1].clone());
+                i += 2;
+            } else if args[i] == "--script-file" && i + 1 < args.len() {
+                let path = &args[i + 1];
+                match std::fs::read_to_string(path) {
+                    Ok(contents) => script_to_run = Some(contents),
+                    Err(e) => {
+                        println!("Failed to read script file '{}': {}", path, e);
+                        log::debug!("Failed to read script file '{}': {}", path, e);
+                    }
+                }
+                i += 2;
+            } else {
+                i += 1;
+            }
+        }
 
         // Check if the CDP server is running
         if !is_cdp_server_running().await {
@@ -382,15 +439,15 @@ async fn main() -> std::io::Result<()> {
                     bring_chrome_to_front_and_resize_with_powershell(bounds);
                 }
 
-                // if let Err(e) = set_tab_title(&target_id, &target_id){
-                //     log::debug!("Failed to set tab title: {}", e);
-                // }
-                // if let Some(hwnd) = find_chrome_hwnd_by_title(&target_id) {
-                //     bring_hwnd_to_front(hwnd);
-                // } else {
-                //     log::debug!("Failed to find Chrome window with title '{}'.",&target_id);
-                // }
-                // set_tab_title(&target_id, &title).ok();
+                // Execute script if provided
+                if let Some(ref script) = script_to_run {
+                    println!("Executing script on tab...");
+                    if let Err(e) = execute_script_on_tab(&target_id, script).await {
+                        println!("Failed to execute script: {}", e);
+                        log::debug!("Failed to execute script: {}", e);
+                    }
+                }
+
                 if refresh {
                     log::debug!("Refreshing tab with bangId {}: {}", bang_id, target_id);
                     refresh_tab(&target_id).await.ok();
@@ -399,6 +456,29 @@ async fn main() -> std::io::Result<()> {
                     "Tab with bangId {} is already open, activating it.",
                     bang_id
                 );
+                #[cfg(target_os = "windows")]
+                if let Some((target_id, title, page_url)) =
+                    search_tabs_for_bang_id(&bang_id).await.ok().flatten()
+                {
+                    if let Some(hwnd) = find_chrome_hwnd_by_title(&title) {
+                        println!(
+                            "HWND: {:?}\nPID: {:?}\nTITLE: {}\nTARGET: {}\nPAGE_URL: {}",
+                            hwnd,
+                            unsafe {
+                                let mut pid = 0;
+                                winapi::um::winuser::GetWindowThreadProcessId(hwnd, &mut pid);
+                                pid
+                            },
+                            title,
+                            target_id,
+                            page_url
+                        );
+                        log::debug!("Found HWND for tab '{}': {:?}", title, hwnd);
+                    } else {
+                        println!("No HWND found for tab '{}'", title);
+                        log::debug!("No HWND found for tab '{}'", title);
+                    }
+                }
                 if close {
                     log::debug!("Closing tab with bangId {}...", target_id);
                     if let Err(e) = close_tab_by_target_id(&target_id).await {
@@ -423,7 +503,7 @@ async fn main() -> std::io::Result<()> {
         }
         log::debug!("{} not found, opening.", clean_url);
         let result = if open_window {
-            open_window_via_devtools(&clean_url, &bangs).await
+            open_window_via_devtools(&clean_url, use_direct, redirect_seconds, &bangs).await
         } else {
             open_tab_via_devtools_and_return_id(&clean_url, &bangs).await
         };
@@ -451,6 +531,15 @@ async fn main() -> std::io::Result<()> {
                         std::io::ErrorKind::Other,
                         format!("{}", e),
                     ));
+                }
+            }
+
+            // Execute script if provided
+            if let Some(ref script) = script_to_run {
+                println!("Executing script on tab...");
+                if let Err(e) = execute_script_on_tab(&target_id, script).await {
+                    println!("Failed to execute script: {}", e);
+                    log::debug!("Failed to execute script: {}", e);
                 }
             }
 
@@ -519,6 +608,8 @@ async fn main() -> std::io::Result<()> {
 
 async fn open_window_via_devtools(
     clean_url: &str,
+    use_direct: bool,
+    redirect_seconds: Option<u64>,
     bangs: &std::collections::HashMap<String, String>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let response = reqwest::get("http://localhost:9222/json/version").await?;
@@ -565,12 +656,18 @@ async fn open_window_via_devtools(
     use base64::engine::general_purpose::STANDARD as base64_engine;
 
     let bang_id = bangs.get("id").cloned().unwrap_or_default();
-    let html_content = include_str!("../static/initial_payload.html")
-        .replace("{{BANG_ID}}", &bang_id)
-        .replace("{{CLEAN_URL}}", clean_url)
-        .replace("{{DELAY_IN_SECONDS}}", "2");
-    let encoded_html = base64_engine.encode(html_content);
-    let placeholder_url = format!("data:text/html;base64,{}#{}", encoded_html, bang_id);
+    // Use the value from DELAY_CELL initialized in main
+    let delay = redirect_seconds.unwrap_or(0);
+    let placeholder_url = if use_direct || delay == 0 {
+        format!("{}#{}", clean_url, bang_id)
+    } else {
+        let html_content = include_str!("../static/initial_payload.html")
+                    .replace("{{BANG_ID}}", &bang_id)
+                    .replace("{{CLEAN_URL}}", clean_url)
+                    .replace("{{DELAY_IN_SECONDS}}", &delay.to_string());
+        let encoded_html = base64_engine.encode(html_content);
+        format!("data:text/html;base64,{}#{}", encoded_html, bang_id)
+    };
     println!(
         "{:?} Bounds: left={}, top={}, width={}, height={}, include_bounds={}",
         monitor_index, left, top, width, height, include_bounds
@@ -629,15 +726,89 @@ async fn open_window_via_devtools(
         //     .await?;
 
         // Step 3: Wait for the response to get the targetId
+        println!(
+            "Waiting for response to get targetId for bangId: {}",
+            bang_id
+        );
         let timeout = std::time::Duration::from_secs(5); // Define a timeout duration
         if let Ok(Some(Ok(tungstenite::Message::Text(txt)))) =
             tokio::time::timeout(timeout, socket.next()).await
         {
             let json: serde_json::Value = serde_json::from_str(&txt)?;
             if let Some(target_id) = json["result"]["targetId"].as_str() {
-                let _ =
-                    set_bang_id_session(&target_id, &bangs.get("id").cloned().unwrap_or_default())
-                        .await;
+                let bang_id_val = bangs.get("id").cloned().unwrap_or_default();
+                let set_bang_result = set_bang_id_session(&target_id, &bang_id_val).await;
+                println!("set_bang_id_session result: {:?}", set_bang_result);
+                log::debug!("set_bang_id_session result: {:?}", set_bang_result);
+
+                let mut title = String::new();
+                // Print all tab URLs for diagnostics
+                match reqwest::get("http://localhost:9222/json").await {
+                    Ok(resp) => match resp.json::<Vec<serde_json::Value>>().await {
+                        Ok(tabs) => {
+                            println!("Tabs after window creation:");
+                            for tab in &tabs {
+                                let url = tab["url"].as_str().unwrap_or("");
+                                title = tab["title"].as_str().unwrap_or("").to_owned();
+                                println!("  title: '{}' url: '{}'", title, url);
+                            }
+                        }
+                        Err(e) => println!("Failed to parse tabs JSON: {}", e),
+                    },
+                    Err(e) => println!("Failed to fetch tabs: {}", e),
+                }
+
+                log::debug!(
+                    "Searching for tab info after window creation for bangId: {}",
+                    bang_id
+                );
+                match search_tabs_for_bang_id(&bang_id).await {
+                    Ok(Some(tab_info)) => {
+                        log::debug!("Tab info for bangId {}: {:?}", bang_id, tab_info);
+                        // tab_info.0 = target_id, tab_info.1 = title, tab_info.2 = url
+                        #[cfg(target_os = "windows")]
+                        {
+                            log::debug!("Attempting to find HWND for tab title: {}", tab_info.1);
+                            match find_chrome_hwnd_by_title(&tab_info.1) {
+                                Some(hwnd) => {
+                                    println!(
+                                        "HWND: {:?}\nPID: {:?}\nTITLE: {}\nTARGET: {}\nPAGE_URL: {}",
+                                        hwnd,
+                                        unsafe {
+                                            let mut pid = 0;
+                                            winapi::um::winuser::GetWindowThreadProcessId(
+                                                hwnd, &mut pid,
+                                            );
+                                            pid
+                                        },
+                                        tab_info.1,
+                                        tab_info.0,
+                                        tab_info.2
+                                    );
+                                }
+                                None => {
+                                    println!(
+                                        "No HWND found for target {} (title '{}')",
+                                        tab_info.0, tab_info.1
+                                    );
+                                    log::debug!(
+                                        "No HWND found for target {} (title '{}')",
+                                        tab_info.0,
+                                        tab_info.1
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        println!("No tab found for bangId {} after window creation.", bang_id);
+                        log::debug!("No tab found for bangId {} after window creation.", bang_id);
+                    }
+                    Err(e) => {
+                        println!("Error searching for tab info after window creation: {}", e);
+                        log::debug!("Error searching for tab info after window creation: {}", e);
+                    }
+                }
                 return Ok(target_id.to_owned());
             }
         }
@@ -676,7 +847,7 @@ fn get_screen_bounds(
             .get("h")
             .and_then(|v| parse_dimension(v, screen_height))
             .unwrap_or(screen_height);
-        print!("params: x: {}, y: {}, w: {}, h: {}", x, y, w, h);
+        println!("params: x: {}, y: {}, w: {}, h: {}", x, y, w, h);
         if let Some(index) = monitor_index {
             println!(" monitor_index: {}", index);
             if let Some((adjusted_x, adjusted_y, adjusted_w, adjusted_h)) =
@@ -743,6 +914,7 @@ async fn open_tab_via_devtools_and_return_id(
             if let Ok(Message::Text(txt)) = msg {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&txt) {
                     if let Some(target_id) = json["result"]["targetId"].as_str() {
+                        println!("{:?}", json);
                         return Ok(target_id.to_owned());
                     }
                 }
@@ -1854,4 +2026,48 @@ fn find_chrome_with_debug_port() -> Option<u32> {
     }
 
     None
+}
+
+// Execute arbitrary JavaScript on a tab via DevTools Protocol
+async fn execute_script_on_tab(
+    target_id: &str,
+    script: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let socket_url = format!("ws://localhost:9222/devtools/page/{}", target_id);
+    let (mut socket, _) = tokio_tungstenite::connect_async(&socket_url).await?;
+    let enable = serde_json::json!({
+        "id": 1,
+        "method": "Runtime.enable"
+    });
+    socket
+        .send(Message::Text(enable.to_string().into()))
+        .await?;
+    let id = get_unique_id();
+    let eval_command = serde_json::json!({
+        "id": id,
+        "method": "Runtime.evaluate",
+        "params": {
+            "expression": script,
+            "returnByValue": false
+        }
+    });
+    socket
+        .send(Message::Text(eval_command.to_string().into()))
+        .await?;
+    let timeout_duration = Duration::from_secs(5);
+    let timeout_future = tokio::time::sleep(timeout_duration);
+    tokio::pin!(timeout_future);
+    'outer: while let Some(Ok(msg)) = tokio::select! {
+        _ = &mut timeout_future => {
+            log::debug!("Timeout while waiting for script eval response.");
+            break 'outer;
+        }
+        msg = socket.next() => msg
+    } {
+        if let Message::Text(txt) = msg {
+            println!("Script eval response: {}", txt);
+            break;
+        }
+    }
+    Ok(())
 }

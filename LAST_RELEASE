@@ -1,1 +1,6 @@
-﻿25/05/28|31ad8|0.1.10
+﻿25/07/15|14c8371|0.1.11
+## [0.1.11](https://github.com/davehorner/debugchrome-cdp-rs/compare/v0.1.10...v0.1.11) - 2025-07-15
+
+### Added
+
+- *(devtools)* add --direct, --redirect-seconds, and script execution support

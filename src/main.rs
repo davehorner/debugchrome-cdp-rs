@@ -460,7 +460,8 @@ async fn main() -> std::io::Result<()> {
                 if let Some((target_id, title, page_url)) =
                     search_tabs_for_bang_id(&bang_id).await.ok().flatten()
                 {
-                    if let Some(hwnd) = find_chrome_hwnd_by_title(&title) {
+                    println!("Found tab with bangId {}: {} {}", bang_id, target_id, title);
+                    if let Some(hwnd) = find_chrome_hwnd_by_title(&title, &bang_id) {
                         println!(
                             "HWND: {:?}\nPID: {:?}\nTITLE: {}\nTARGET: {}\nPAGE_URL: {}",
                             hwnd,
@@ -662,9 +663,9 @@ async fn open_window_via_devtools(
         format!("{}#{}", clean_url, bang_id)
     } else {
         let html_content = include_str!("../static/initial_payload.html")
-                    .replace("{{BANG_ID}}", &bang_id)
-                    .replace("{{CLEAN_URL}}", clean_url)
-                    .replace("{{DELAY_IN_SECONDS}}", &delay.to_string());
+            .replace("{{BANG_ID}}", &bang_id)
+            .replace("{{CLEAN_URL}}", clean_url)
+            .replace("{{DELAY_IN_SECONDS}}", &delay.to_string());
         let encoded_html = base64_engine.encode(html_content);
         format!("data:text/html;base64,{}#{}", encoded_html, bang_id)
     };
@@ -769,7 +770,7 @@ async fn open_window_via_devtools(
                         #[cfg(target_os = "windows")]
                         {
                             log::debug!("Attempting to find HWND for tab title: {}", tab_info.1);
-                            match find_chrome_hwnd_by_title(&tab_info.1) {
+                            match find_chrome_hwnd_by_title(&tab_info.1, &bang_id) {
                                 Some(hwnd) => {
                                     println!(
                                         "HWND: {:?}\nPID: {:?}\nTITLE: {}\nTARGET: {}\nPAGE_URL: {}",
@@ -1309,44 +1310,114 @@ use std::ptr;
 #[cfg(target_os = "windows")]
 use winapi::shared::windef::HWND;
 #[cfg(target_os = "windows")]
-use winapi::um::winuser::{EnumWindows, GetWindowTextA};
+use winapi::um::winuser::EnumWindows;
 
 #[cfg(target_os = "windows")]
 #[allow(dead_code)]
-fn find_chrome_hwnd_by_title(title: &str) -> Option<HWND> {
-    unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: isize) -> i32 {
+fn find_chrome_hwnd_by_title(title: &str, bangid: &str) -> Option<HWND> {
+    
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use winapi::um::winuser::{GW_HWNDPREV, GetWindow, GetWindowTextW};
+
+    // Helper to get z-order (lower index = higher z-order)
+    fn get_z_order(hwnd: HWND) -> usize {
+        let mut order = 0;
+        let mut current = hwnd;
         unsafe {
-            let data = &mut *(lparam as *mut (String, HWND));
-            let title_ptr = &data.0;
-            let hwnd_ptr = &mut data.1;
+            while !current.is_null() {
+                current = GetWindow(current, GW_HWNDPREV);
+                order += 1;
+            }
+        }
+        order
+    }
 
-            let mut buffer = [0; 256];
-            let length = GetWindowTextA(hwnd, buffer.as_mut_ptr(), buffer.len() as i32);
+    // Store all matching HWNDs
+    let mut matches: Vec<HWND> = Vec::new();
+    // Store all Chrome browser HWNDs (for fallback)
+    let mut chrome_hwnds: Vec<HWND> = Vec::new();
 
-            if length > 0 {
-                let window_title = String::from_utf8_lossy(std::slice::from_raw_parts(
-                    buffer.as_ptr().cast::<u8>(),
-                    length as usize,
-                ))
-                .to_string();
-                log::debug!("Window title: {}", window_title);
-                if window_title.contains(title_ptr) {
-                    //&& IsWindowVisible(hwnd) != 0 {
-                    *hwnd_ptr = hwnd;
-                    return 0; // Stop enumeration
+    struct EnumData<'a> {
+        title_ptr: &'a str,
+        matches_ptr: &'a mut Vec<HWND>,
+        chrome_hwnds: &'a mut Vec<HWND>,
+    }
+
+    unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: isize) -> i32 {
+        let data = unsafe { &mut *(lparam as *mut EnumData) };
+        let mut buffer = [0u16; 256];
+        let length = unsafe { GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32) };
+        if length > 0 {
+            let os_string = OsString::from_wide(&buffer[..length as usize]);
+            if let Ok(window_title) = os_string.into_string().map(|s| s.trim().to_string()) {
+                let window_title_lc = window_title.to_lowercase();
+                let search_lc = data.title_ptr.trim().to_lowercase();
+                let chrome_suffixes = [" - google chrome", " - chrome"];
+                let mut matched = false;
+                if window_title_lc.contains(&search_lc) {
+                    matched = true;
+                } else {
+                    for suffix in &chrome_suffixes {
+                        let with_suffix = format!("{}{}", search_lc, suffix);
+                        if window_title_lc.contains(&with_suffix) {
+                            matched = true;
+                            break;
+                        }
+                    }
+                }
+                if matched {
+                    data.matches_ptr.push(hwnd);
+                }
+                // Fallback: collect all Chrome browser windows
+                if window_title_lc.ends_with(" - google chrome")
+                    || window_title_lc.ends_with(" - chrome")
+                {
+                    data.chrome_hwnds.push(hwnd);
                 }
             }
-            1 // Continue enumeration
+        }
+        1 // Continue enumeration
+    }
+
+    let mut data = EnumData {
+        title_ptr: title,
+        matches_ptr: &mut matches,
+        chrome_hwnds: &mut chrome_hwnds,
+    };
+    unsafe {
+        winapi::um::winuser::EnumWindows(Some(enum_windows_proc), &mut data as *mut _ as isize);
+    }
+    if matches.len() > 1 {
+        println!("Multiple Chrome windows found matching title '{}':", title);
+        for hwnd in &matches {
+            let mut buffer = [0u16; 256];
+            let length = unsafe {
+                winapi::um::winuser::GetWindowTextW(*hwnd, buffer.as_mut_ptr(), buffer.len() as i32)
+            };
+            let window_title = if length > 0 {
+                OsString::from_wide(&buffer[..length as usize])
+                    .to_string_lossy()
+                    .into_owned()
+            } else {
+                String::from("<no title>")
+            };
+            let zorder = get_z_order(*hwnd);
+            println!(
+                "  HWND {:?}  Title '{}'  BangId '{}'  ZOrder {}",
+                hwnd, window_title, bangid, zorder
+            );
         }
     }
-
-    let hwnd: HWND = ptr::null_mut();
-    let mut data = (title.to_string(), hwnd);
-    unsafe {
-        EnumWindows(Some(enum_windows_proc), &mut data as *mut _ as isize);
+    // Return the topmost matching window, or fallback to topmost Chrome window
+    if let Some(hwnd) = matches.into_iter().min_by_key(|&hwnd| get_z_order(hwnd)) {
+        Some(hwnd)
+    } else {
+        // Fallback: return topmost Chrome browser window
+        chrome_hwnds
+            .into_iter()
+            .min_by_key(|&hwnd| get_z_order(hwnd))
     }
-
-    if data.1.is_null() { None } else { Some(data.1) }
 }
 
 #[allow(dead_code)]
@@ -1409,7 +1480,7 @@ use winapi::um::winuser::{SW_RESTORE, SetForegroundWindow, ShowWindow};
 #[allow(dead_code)]
 fn bring_hwnd_to_front(hwnd: HWND) {
     if hwnd.is_null() {
-        log::debug!("Invalid HWND: Cannot bring to front.");
+        log::debug!("Invalid HWND Cannot bring to front.");
         return;
     }
 
@@ -2018,7 +2089,7 @@ fn find_chrome_with_debug_port() -> Option<u32> {
                 }
 
                 if let Some(hwnd) = data.hwnd {
-                    println!("Found Chrome window with HWND: {:?}", hwnd);
+                    println!("Found Chrome window with HWND {:?}", hwnd);
                     return Some(pid.as_u32());
                 }
             }

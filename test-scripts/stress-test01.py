@@ -1,6 +1,8 @@
 """
 stress-test01.py
 
+uv run --with screeninfo .\test-scripts\stress-test01.py
+
 Description:
     A stress‐test script for the debugchrome protocol. It divides each
     connected monitor into a grid of windows and opens a placeholder

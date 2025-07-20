@@ -1,6 +1,6 @@
-﻿25/07/15|14c8371|0.1.11
-## [0.1.11](https://github.com/davehorner/debugchrome-cdp-rs/compare/v0.1.10...v0.1.11) - 2025-07-15
+﻿25/07/20|e55bc59|0.1.12
+## [0.1.12](https://github.com/davehorner/debugchrome-cdp-rs/compare/v0.1.11...v0.1.12) - 2025-07-20
 
 ### Added
 
-- *(devtools)* add --direct, --redirect-seconds, and script execution support
+- *(windows)* improve HWND detection by refining Chrome title matching and z-order fallback

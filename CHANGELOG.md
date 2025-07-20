@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.12](https://github.com/davehorner/debugchrome-cdp-rs/compare/v0.1.11...v0.1.12) - 2025-07-20
+
+### Added
+
+- *(windows)* improve HWND detection by refining Chrome title matching and z-order fallback
+
 ## [0.1.11](https://github.com/davehorner/debugchrome-cdp-rs/compare/v0.1.10...v0.1.11) - 2025-07-15
 
 ### Added
